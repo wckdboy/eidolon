@@ -11,12 +11,12 @@ Native Kotlin / Jetpack Compose UI; Camera2 capture; local MediaStore storage. A
 
 ## Download
 
-Get **[v0.1.0-alpha.1 — Early Light](https://github.com/wckdboy/eidolon/releases/tag/v0.1.0-alpha.1)** from GitHub Releases. This is an early testing release, not a production camera recommendation.
+Get **[v0.1.0-alpha.2 — Clear View](https://github.com/wckdboy/eidolon/releases/tag/v0.1.0-alpha.2)** from GitHub Releases. This is an early testing release, not a production camera recommendation.
 
 | Asset | Purpose |
 | --- | --- |
-| `eidolon-0.1.0-alpha.1-release.apk` | Signed, non-debuggable universal APK; recommended for trying the app. |
-| `eidolon-0.1.0-alpha.1-debug.apk` | Debuggable universal APK with a separate application ID; can coexist with the release app. |
+| `eidolon-0.1.0-alpha.2-release.apk` | Signed, non-debuggable universal APK; recommended for trying the app. |
+| `eidolon-0.1.0-alpha.2-debug.apk` | Debuggable universal APK with a separate application ID; can coexist with the release app. |
 | `README.md` | These setup instructions, features, and known limits. |
 | `SHA256SUMS` | Download checksums. |
 | `BUILD-INFO.txt` | Source commit, build versions, validation, and signing certificate fingerprint. |
@@ -55,9 +55,15 @@ The script refuses to overwrite existing signing material. With `.signing/releas
 
 ## Capture architecture
 
-`CaptureModel.kt` holds capture intent, capabilities, orientation math, and Bloom rendering coefficients. `CameraEngine.kt` confines Camera2 lifecycle and frame matching to a camera thread. Capture results, RAW images, and JPEGs must have matching sensor timestamps before saving. Capture settings are frozen for each shot; only one save is in flight. Failed writes remove their MediaStore entries. Camera shutdown closes readers and retained images.
+`CaptureModel.kt` holds capture intent, capabilities, orientation math, and Bloom rendering coefficients. `CameraEngine.kt` confines Camera2 lifecycle and frame matching to a camera thread. Capture results, RAW images, and JPEGs must have matching, non-null sensor timestamps before saving. Capture settings are frozen for each shot; only one save is in flight. Failed writes remove their MediaStore entries. Reader leases keep in-flight RAW images valid while the camera shuts down; readers close after the save releases its image.
 
-`PhotoStore.kt` writes DNG/JPEG pairs through pending MediaStore entries. Bloom rendering runs on a separate worker, preserves key EXIF fields, and never modifies Pure pixels. The UI gets immutable capability and metering snapshots. Capture and composition state are separate from Android storage and presentation, providing a starting point for a later native iOS implementation.
+`PhotoStore.kt` writes DNG/JPEG pairs through pending MediaStore entries. DNG encoding and Bloom rendering run on a separate worker. DNGs write directly into MediaStore without a temporary DNG file and second copy. Bloom reads source EXIF from memory, releases its source bitmap before encoding, and skips rendering and recompression entirely at 0%. The UI gets immutable capability and metering snapshots. Capture and composition state are separate from Android storage and presentation, providing a starting point for a later native iOS implementation.
+
+## Current UI and responsiveness improvements
+
+Alpha.2 introduces a quieter, image-first layout: compact Pure/Bloom tabs, a smaller header, neutral shutter, and Pro controls below the viewfinder. Tap a Pro control to reveal its slider, or tap Feeling in Bloom to adjust the grade. The preview has no decorative gradient or captions over the photograph. Fun resets manual controls and EV; the last photo is remembered across launches.
+
+Bloom intensity changes update the preview without resubmitting sensor controls. Sensor updates are coalesced over 16 ms, identical UI snapshots are skipped, and completed capture timeouts are cancelled immediately. These changes remove avoidable work; real-device speed and memory benchmarks remain to be collected.
 
 ## Honest limits of this first build
 
@@ -75,8 +81,12 @@ Start with one reference Android phone and a fixed collection of daylight, skin,
 
 ## Validation
 
-The debug build, unit tests (color identity/clamping and front/rear orientation), and Android lint are runnable with the command above. Lint currently emits non-blocking warnings, including the portrait layout and platform EXIF API. Hardware acceptance testing remains required before release.
+The debug build, eight unit tests (color, orientation, timestamp matching, sensor-control changes, and concurrent reader ownership), and Android lint are runnable with the command above. Five Android instrumentation tests cover original-byte preservation, zero-strength Bloom, graded JPEG metadata, storage-failure rollback, and saving while the camera closes followed by reopening for another capture. Run them on a connected emulator or phone with `./gradlew :app:connectedDebugAndroidTest`. Lint currently emits non-blocking warnings, including the portrait layout and platform EXIF API. Hardware acceptance testing remains required before a production release.
 
-On an API 36.1 emulator, the permission flow, live preview, camera switching, background/resume recovery, Pure DNG + JPEG capture, and Bloom JPEG capture were exercised. Both JPEGs decoded successfully with orientation preserved. The DNG contained a CFA photometric tag and DNG version metadata. A Pro capture requested ISO 469 and the saved JPEG reported ISO 469. No runtime crashes were logged during these checks. Synthetic emulator scenes were used; these checks do not establish photographic quality.
+In alpha.1, on an API 36.1 emulator, the permission flow, live preview, camera switching, background/resume recovery, Pure DNG + JPEG capture, and Bloom JPEG capture were exercised. Both JPEGs decoded successfully with orientation preserved. The DNG contained a CFA photometric tag and DNG version metadata. A Pro capture requested ISO 469 and the saved JPEG reported ISO 469. No runtime crashes were logged during these checks. Synthetic emulator scenes were used; these checks do not establish photographic quality.
 
-Interface captures: [Pure / Fun](https://github.com/wckdboy/eidolon/blob/main/artifacts/screenshots/pure.png) and [Bloom / Pro](https://github.com/wckdboy/eidolon/blob/main/artifacts/screenshots/bloom-pro.png).
+Alpha.1 interface captures (the current layout has changed): [Pure / Fun](https://github.com/wckdboy/eidolon/blob/main/artifacts/screenshots/pure.png) and [Bloom / Pro](https://github.com/wckdboy/eidolon/blob/main/artifacts/screenshots/bloom-pro.png).
+
+Alpha.2 passed all eight unit tests and five instrumentation tests on a fresh API 36.1 emulator. The capture integration test saved a DNG/JPEG pair while closing the camera, decoded the JPEG, checked DNG dimensions, reopened the camera, and saved a Bloom JPEG. Both build variants and lint checks completed successfully.
+
+Alpha.2 visual inspection remains pending: the computer-control tool could not access the emulator window. Real-phone latency, color, and memory benchmarks remain unmeasured.

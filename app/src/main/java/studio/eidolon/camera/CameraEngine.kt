@@ -12,7 +12,6 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.view.Surface
 import android.view.TextureView
-import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
 
@@ -29,6 +28,7 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     private var surface: Surface? = null
     private var jpegReader: ImageReader? = null
     private var rawReader: ImageReader? = null
+    private var rawOwner: LeasedResource<ImageReader>? = null
     private var characteristics: CameraCharacteristics? = null
     private var generation = 0
     private var cameraIndex = 0
@@ -36,6 +36,15 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     private var opening = false
     private var pending: Pending? = null
     private var lastMetering = 0L
+    private var captureTimeout: Runnable? = null
+    @Volatile private var destroyed = false
+    private val repeatUpdate = Runnable { repeat() }
+    private val lookUpdate = Runnable { applyPreviewLookNow() }
+    private val preferences by lazy { context.getSharedPreferences("camera", Context.MODE_PRIVATE) }
+
+    init {
+        handler.post { publish(state.copy(savedUri = preferences.getString("lastPhoto", null))) }
+    }
     @Volatile private var view: TextureView? = null
     @Volatile private var settings = CaptureSettings()
     @Volatile private var orientation = 0
@@ -51,7 +60,11 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
         texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(t: SurfaceTexture, w: Int, h: Int) { handler.post { open() } }
             override fun onSurfaceTextureSizeChanged(t: SurfaceTexture, w: Int, h: Int) { handler.post { transform() } }
-            override fun onSurfaceTextureDestroyed(t: SurfaceTexture): Boolean { handler.post { closeCamera() }; return true }
+            override fun onSurfaceTextureDestroyed(t: SurfaceTexture): Boolean {
+                // Camera output must be disconnected before releasing its SurfaceTexture.
+                if (!handler.post { closeCamera(); t.release() }) t.release()
+                return false
+            }
             override fun onSurfaceTextureUpdated(t: SurfaceTexture) = Unit
         }
         applyPreviewLook()
@@ -61,13 +74,20 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     fun start() { handler.post { active = true; open() } }
     fun stop() { handler.post { active = false; closeCamera() } }
     fun destroy() {
+        destroyed = true
+        main.removeCallbacks(lookUpdate)
         handler.post { active = false; closeCamera(); writer.shutdown(); thread.quitSafely() }
     }
     fun setOrientation(degrees: Int) { orientation = degrees }
     fun update(value: CaptureSettings) {
+        val previous = settings
+        if (value == previous) return
         settings = value
-        applyPreviewLook()
-        handler.post { repeat() }
+        if (previous.look != value.look || previous.bloom != value.bloom) applyPreviewLook()
+        if (!previous.sameSensorControls(value)) {
+            handler.removeCallbacks(repeatUpdate)
+            handler.postDelayed(repeatUpdate, 16)
+        }
     }
     fun flip() { handler.post {
         if (state.busy) return@post
@@ -78,15 +98,21 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     } }
 
     private fun publish(value: CameraState) {
+        if (state == value) return
         state = value
-        main.post { onState(value) }
+        if (!destroyed) main.post { if (!destroyed) onState(value) }
     }
-    private fun applyPreviewLook() { main.post {
+    private fun applyPreviewLook() {
+        main.removeCallbacks(lookUpdate)
+        main.post(lookUpdate)
+    }
+    private fun applyPreviewLookNow() {
+        if (destroyed) return
         val paint = if (settings.look == Look.BLOOM) Paint().apply {
             colorFilter = ColorMatrixColorFilter(BloomColor.matrix(settings.bloom))
         } else null
         view?.setLayerType(if (paint == null) android.view.View.LAYER_TYPE_NONE else android.view.View.LAYER_TYPE_HARDWARE, paint)
-    } }
+    }
 
     private fun cameras(): List<String> = manager.cameraIdList.sortedBy {
         if (manager.getCameraCharacteristics(it)[CameraCharacteristics.LENS_FACING] == CameraCharacteristics.LENS_FACING_BACK) 0 else 1
@@ -109,7 +135,8 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
             val info = CameraInfo(
                 raw = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW),
                 manual = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
-                focusMax = c[CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE] ?: 0f,
+                focusMax = if (c[CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES]?.contains(CaptureRequest.CONTROL_AF_MODE_OFF) == true)
+                    c[CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE] ?: 0f else 0f,
                 isoMin = iso?.lower ?: 100, isoMax = iso?.upper ?: 1600,
                 shutterMin = shutter?.lower ?: 125_000, shutterMax = minOf(shutter?.upper ?: 100_000_000, 1_000_000_000L),
                 evMin = ev?.lower ?: 0, evMax = ev?.upper ?: 0,
@@ -147,7 +174,7 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
             val camera = device ?: return
             val c = characteristics ?: return
             val map = requireNotNull(c[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP])
-            jpegReader?.close(); rawReader?.close(); surface?.release()
+            jpegReader?.close(); rawOwner?.close(); rawOwner = null; rawReader = null; surface?.release()
             // Prefer 4:3 and cap JPEG to 12 MP to keep Bloom working memory bounded.
             val jpegSizes = map.getOutputSizes(ImageFormat.JPEG).toList()
             val choices = jpegSizes.filter { it.width.toLong() * it.height <= 12_500_000 }
@@ -185,6 +212,7 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
                     }, handler)
                 }
             } else null
+            rawOwner = rawReader?.let { LeasedResource(it) }
             val outputs = listOfNotNull(surface, jpegReader?.surface, rawReader?.surface)
             camera.createCaptureSession(outputs, object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
@@ -295,7 +323,7 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
                 set(CaptureRequest.JPEG_ORIENTATION, rotation)
                 set(CaptureRequest.JPEG_QUALITY, 97.toByte())
             }.build()
-            session?.capture(request, object : CameraCaptureSession.CaptureCallback() {
+            requireNotNull(session).capture(request, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
                     if (pending !== job) return
                     job.result = result; finishCapture()
@@ -304,10 +332,10 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
                     if (pending === job) captureFailed("Capture failed. Try again.")
                 }
             }, handler)
-            handler.postDelayed({ if (pending === job) {
+            captureTimeout = Runnable { if (pending === job) {
                 captureFailed("Capture timed out. Reopening the camera…")
                 closeCamera(); open()
-            } }, 8000)
+            } }.also { handler.postDelayed(it, 8000) }
         } catch (e: Exception) { captureFailed(e.message ?: "Capture failed.") }
     } }
 
@@ -317,35 +345,43 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
         val result = job.result ?: return
         if (job.wantsRaw && job.raw == null) return
         val timestamp = result[CaptureResult.SENSOR_TIMESTAMP]
-        if (timestamp != job.jpegTimestamp || (job.wantsRaw && timestamp != job.raw?.timestamp)) {
+        if (!CaptureMath.matchingFrames(timestamp, job.jpegTimestamp, job.raw?.timestamp, job.wantsRaw)) {
             captureFailed("Capture frames did not match. Try again."); return
         }
-        var rawFile: File? = null
+        val c = requireNotNull(characteristics)
+        val image = job.raw
+        val lease = if (image != null) requireNotNull(rawOwner).acquire() else null
+        pending = null
+        clearCaptureTimeout()
+        publish(state.copy(message = "Saving…"))
         try {
-            job.raw?.let { image ->
-                rawFile = File.createTempFile("eidolon", ".dng", context.cacheDir)
-                DngCreator(requireNotNull(characteristics), result).use { dng ->
-                    dng.setOrientation(when (job.rotation) { 90 -> 6; 180 -> 3; 270 -> 8; else -> 1 })
-                    rawFile!!.outputStream().use { dng.writeImage(it, image) }
-                }
-                image.close(); job.raw = null
-            }
-            pending = null
-            publish(state.copy(message = if (job.settings.look == Look.BLOOM) "A little more wonder…" else "Saving the original…"))
-            val raw = rawFile
             writer.execute {
                 try {
-                    val uri = PhotoStore(context).save(jpeg, raw, job.settings)
+                    val writeRaw: ((java.io.OutputStream) -> Unit)? = image?.let { rawImage ->
+                        { output ->
+                            DngCreator(c, result).use { dng ->
+                                dng.setOrientation(when (job.rotation) { 90 -> 6; 180 -> 3; 270 -> 8; else -> 1 })
+                                dng.writeImage(output, rawImage)
+                            }
+                        }
+                    }
+                    val uri = PhotoStore(context).save(jpeg, writeRaw, job.settings)
+                    preferences.edit().putString("lastPhoto", uri.toString()).apply()
                     handler.post { publish(state.copy(busy = false, savedUri = uri.toString(), error = false,
-                        message = if (raw != null) "Saved · DNG + JPEG" else "Saved · ${job.settings.look.name.lowercase().replaceFirstChar { it.uppercase() }} JPEG")) }
+                        message = if (image != null) "Saved · DNG + JPEG" else "Saved · ${job.settings.look.name.lowercase().replaceFirstChar { it.uppercase() }} JPEG")) }
                 } catch (e: Exception) {
                     handler.post { publish(state.copy(busy = false, error = true, message = "Couldn’t save: ${e.message ?: "storage unavailable"}")) }
-                }
+                } finally { image?.close(); lease?.close() }
             }
-        } catch (e: Exception) { rawFile?.delete(); captureFailed("Couldn’t save RAW: ${e.message}") }
+        } catch (e: Exception) { image?.close(); lease?.close(); captureFailed("Couldn’t save: ${e.message}") }
     }
 
+    private fun clearCaptureTimeout() {
+        captureTimeout?.let(handler::removeCallbacks)
+        captureTimeout = null
+    }
     private fun captureFailed(message: String) {
+        clearCaptureTimeout()
         pending?.raw?.close(); pending = null
         publish(state.copy(busy = false, error = true, message = message))
     }
@@ -354,12 +390,13 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
         publish(state.copy(ready = false, error = true, message = message))
     }
     private fun closeCamera() {
+        handler.removeCallbacks(repeatUpdate)
         generation++; opening = false
         if (pending != null) captureFailed("Capture interrupted before saving.")
         session?.close(); session = null
         device?.close(); device = null
         jpegReader?.close(); jpegReader = null
-        rawReader?.close(); rawReader = null
+        rawOwner?.close(); rawOwner = null; rawReader = null
         surface?.release(); surface = null
         publish(state.copy(ready = false))
     }

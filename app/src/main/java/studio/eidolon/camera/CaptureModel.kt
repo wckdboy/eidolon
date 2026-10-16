@@ -12,6 +12,10 @@ data class CaptureSettings(
     val focus: Float? = null,
 )
 
+/** Bloom intensity changes only rendering; they must not restart camera requests. */
+fun CaptureSettings.sameSensorControls(other: CaptureSettings): Boolean =
+    copy(bloom = other.bloom) == other
+
 data class CameraInfo(
     val raw: Boolean = false,
     val manual: Boolean = false,
@@ -64,6 +68,9 @@ object BloomColor {
 
 /** Bounds latency and memory without silently claiming high-resolution support. */
 object CaptureMath {
+    fun matchingFrames(sensor: Long?, jpeg: Long?, raw: Long?, wantsRaw: Boolean): Boolean =
+        sensor != null && sensor == jpeg && (!wantsRaw || sensor == raw)
+
     fun jpegRotation(sensor: Int, deviceDegrees: Int, front: Boolean): Int =
         (sensor + if (front) -deviceDegrees else deviceDegrees).let { (it + 360) % 360 }
 

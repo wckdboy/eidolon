@@ -7,18 +7,20 @@ import android.media.ExifInterface
 import android.net.Uri
 import android.provider.MediaStore
 import java.io.File
+import java.io.ByteArrayInputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 class PhotoStore(private val context: Context) {
     /** Publish the pair only after both files have been written successfully. */
-    fun save(jpeg: ByteArray, raw: File?, settings: CaptureSettings): Uri {
+    fun save(jpeg: ByteArray, writeRaw: ((OutputStream) -> Unit)?, settings: CaptureSettings): Uri {
         val stem = "EIDOLON_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}"
         val pending = mutableListOf<Uri>()
         var rendered: File? = null
         try {
-            rendered = if (settings.look == Look.BLOOM) renderBloom(jpeg, settings.bloom) else null
+            rendered = if (settings.look == Look.BLOOM && settings.bloom > 0f) renderBloom(jpeg, settings.bloom) else null
             fun insert(extension: String, mime: String): Uri {
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "${stem}_${settings.look.name}.$extension")
@@ -33,34 +35,34 @@ class PhotoStore(private val context: Context) {
             requireNotNull(context.contentResolver.openOutputStream(photo)).use { out ->
                 if (rendered != null) rendered.inputStream().use { it.copyTo(out) } else out.write(jpeg)
             }
-            raw?.let { file ->
+            writeRaw?.let { write ->
                 val uri = insert("dng", "image/x-adobe-dng")
-                requireNotNull(context.contentResolver.openOutputStream(uri)).use { out -> file.inputStream().use { it.copyTo(out) } }
+                requireNotNull(context.contentResolver.openOutputStream(uri)).use(write)
             }
             pending.forEach { uri ->
-                context.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                check(context.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null) == 1) { "Photo publication failed" }
             }
             return photo
         } catch (e: Exception) {
             pending.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
             throw e
-        } finally { raw?.delete(); rendered?.delete() }
+        } finally { rendered?.delete() }
     }
 
     private fun renderBloom(bytes: ByteArray, strength: Float): File {
-        val source = File.createTempFile("source", ".jpg", context.cacheDir)
         val output = File.createTempFile("bloom", ".jpg", context.cacheDir)
         var input: Bitmap? = null
         var result: Bitmap? = null
         try {
-            source.writeBytes(bytes)
             input = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
             result = Bitmap.createBitmap(input.width, input.height, Bitmap.Config.ARGB_8888)
             Canvas(result).drawBitmap(input, 0f, 0f, Paint().apply {
                 colorFilter = ColorMatrixColorFilter(BloomColor.matrix(strength))
             })
+            // Release the decoded source before JPEG encoding and EXIF rewriting.
+            input.recycle(); input = null
             output.outputStream().use { check(result.compress(Bitmap.CompressFormat.JPEG, 97, it)) }
-            val original = ExifInterface(source)
+            val original = ByteArrayInputStream(bytes).use { ExifInterface(it) }
             val edited = ExifInterface(output)
             listOf(ExifInterface.TAG_ORIENTATION, ExifInterface.TAG_DATETIME,
                 ExifInterface.TAG_DATETIME_ORIGINAL, ExifInterface.TAG_EXPOSURE_TIME,
@@ -73,6 +75,6 @@ class PhotoStore(private val context: Context) {
             edited.saveAttributes()
             return output
         } catch (e: Exception) { output.delete(); throw e }
-        finally { source.delete(); input?.recycle(); result?.recycle() }
+        finally { input?.recycle(); result?.recycle() }
     }
 }

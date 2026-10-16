@@ -17,7 +17,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,7 +34,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
@@ -83,6 +82,13 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() { engine.destroy(); super.onDestroy() }
 }
 
+private val SettingsSaver = androidx.compose.runtime.saveable.listSaver<CaptureSettings, Any>(
+    save = { listOf(it.look.name, it.bloom, it.exposure, it.iso ?: -1, it.shutterNs ?: -1L, it.focus ?: -1f) },
+    restore = { CaptureSettings(Look.valueOf(it[0] as String), it[1] as Float, it[2] as Int,
+        (it[3] as Int).takeIf { n -> n >= 0 }, (it[4] as Long).takeIf { n -> n >= 0 },
+        (it[5] as Float).takeIf { n -> n >= 0 }) }
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EidolonScreen(state: CameraState, engine: CameraEngine) {
@@ -91,17 +97,18 @@ private fun EidolonScreen(state: CameraState, engine: CameraEngine) {
     val haptic = LocalHapticFeedback.current
     var granted by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     var asked by rememberSaveable { mutableStateOf(false) }
-    var settings by remember { mutableStateOf(CaptureSettings()) }
+    var settings by rememberSaveable(stateSaver = SettingsSaver) { mutableStateOf(CaptureSettings()) }
     var workspace by rememberSaveable { mutableStateOf(Workspace.FUN) }
     var grid by rememberSaveable { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
-    var activeControl by rememberSaveable { mutableStateOf("EV") }
+    var activeControl by rememberSaveable { mutableStateOf<String?>(null) }
+    var feelingOpen by rememberSaveable { mutableStateOf(false) }
     val accent by animateColorAsState(if (settings.look == Look.PURE) Acid else Peach, label = "mood")
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it; asked = true
         if (it) engine.start()
     }
-    // Refresh permission after returning from Android Settings.
+    LaunchedEffect(settings) { engine.update(settings) }
     DisposableEffect(activity) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
@@ -112,210 +119,189 @@ private fun EidolonScreen(state: CameraState, engine: CameraEngine) {
         onDispose { activity.lifecycle.removeObserver(observer) }
     }
     fun change(value: CaptureSettings) { settings = value; engine.update(value) }
-    Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding().padding(horizontal = 20.dp)) {
-        Row(Modifier.fillMaxWidth().height(70.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Glyph("mark", Paper, Modifier.size(24.dp))
-                Spacer(Modifier.width(9.dp))
-                Text("eidolon", color = Paper, fontSize = 27.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.Medium)
-            }
-            Row(Modifier.clip(CircleShape).background(Color(0xFF242722)).padding(4.dp)) {
-                Workspace.entries.forEach { mode ->
-                    Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 12.sp,
-                        color = if (workspace == mode) Ink else Muted,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clip(CircleShape).background(if (workspace == mode) Paper else Color.Transparent)
-                            .clickable(enabled = !state.busy, role = Role.Tab) {
-                                workspace = mode
-                                if (mode == Workspace.FUN) change(settings.copy(iso = null, shutterNs = null, focus = null))
-                                haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                            }.padding(horizontal = 17.dp, vertical = 9.dp))
+    Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding()) {
+        // A quiet tool bar, with the image given the full available width below it.
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("eidolon", color = Paper, fontSize = 18.sp, letterSpacing = (-0.6).sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            Workspace.entries.forEach { mode ->
+                ModeTab(mode.name.lowercase().replaceFirstChar { it.uppercase() }, workspace == mode, Paper, !state.busy) {
+                    workspace = mode
+                    activeControl = null
+                    if (mode == Workspace.FUN) change(settings.copy(iso = null, shutterNs = null, focus = null, exposure = 0))
+                    haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            IconButton(onClick = { details = true }, modifier = Modifier.size(44.dp)) { Glyph("info", Muted) }
+            IconButton(onClick = { details = true }, modifier = Modifier.size(48.dp)) { Glyph("info", Muted) }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-        val ratio = state.info.aspectRatio
-        val frameWidth = minOf(maxWidth, maxHeight * ratio)
-        Box(Modifier.width(frameWidth).aspectRatio(ratio).clip(RoundedCornerShape(24.dp)).background(Color(0xFF20271F))) {
-            if (granted) AndroidView(factory = { TextureView(it).also(engine::attach) }, modifier = Modifier.fillMaxSize())
-            if (state.ready && grid) Canvas(Modifier.fillMaxSize()) {
-                for (n in 1..2) {
-                    drawLine(Color.White.copy(alpha = 0.24f), Offset(size.width * n / 3, 0f), Offset(size.width * n / 3, size.height), 1.dp.toPx())
-                    drawLine(Color.White.copy(alpha = 0.24f), Offset(0f, size.height * n / 3), Offset(size.width, size.height * n / 3), 1.dp.toPx())
-                }
-            }
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.6f)))))
-            if (!granted) {
-                Column(Modifier.align(Alignment.Center).padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    LensArt(accent)
-                    Spacer(Modifier.height(28.dp))
-                    Text("See it your way.", color = Paper, fontSize = 29.sp, letterSpacing = (-1).sp)
-                    Spacer(Modifier.height(12.dp))
-                    Text("Reality, untouched.\nOr a little more extraordinary.", color = Muted, fontSize = 14.sp,
-                        lineHeight = 22.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    Spacer(Modifier.height(24.dp))
-                    Button(onClick = {
-                        if (asked && !activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
-                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
-                        } else permission.launch(Manifest.permission.CAMERA)
-                    }, colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Ink)) {
-                        Text(if (asked && !activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) "Allow camera in Settings" else "Open your camera",
-                            modifier = Modifier.padding(6.dp), fontWeight = FontWeight.SemiBold)
+            val ratio = state.info.aspectRatio
+            val frameWidth = minOf(maxWidth, maxHeight * ratio)
+            Box(Modifier.width(frameWidth).aspectRatio(ratio).clip(RoundedCornerShape(8.dp)).background(Color(0xFF20271F))) {
+                if (granted) AndroidView(factory = { TextureView(it).also(engine::attach) }, modifier = Modifier.fillMaxSize())
+                if (state.ready && grid) Canvas(Modifier.fillMaxSize()) {
+                    for (n in 1..2) {
+                        drawLine(Color.White.copy(alpha = 0.3f), Offset(size.width * n / 3, 0f), Offset(size.width * n / 3, size.height), 0.5.dp.toPx())
+                        drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, size.height * n / 3), Offset(size.width, size.height * n / 3), 0.5.dp.toPx())
                     }
-                    Text("Just your camera. Everything stays on device.", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 14.dp))
                 }
-            } else if (!state.ready) {
-                Column(Modifier.align(Alignment.Center).padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (!state.error) CircularProgressIndicator(color = accent, modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-                    Text(state.message, color = Paper, modifier = Modifier.padding(16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    if (state.error) Button(onClick = { engine.start() }) { Text("Retry") }
+                // No gradient or decorative copy over the photograph: judge the actual preview.
+                if (!granted) {
+                    Column(Modifier.align(Alignment.Center).verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        LensArt(accent)
+                        Spacer(Modifier.height(24.dp))
+                        Text("See it your way.", color = Paper, fontSize = 28.sp, letterSpacing = (-1).sp)
+                        Text("Reality, with less. Or with feeling.", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 12.dp))
+                        val settingsRequired = asked && !activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
+                        Button(onClick = {
+                            if (settingsRequired) context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                            else permission.launch(Manifest.permission.CAMERA)
+                        }, colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Ink)) {
+                            Text(if (settingsRequired) "Allow camera in Settings" else "Open camera", modifier = Modifier.padding(6.dp))
+                        }
+                        Text("Your photos stay on your phone.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
+                    }
+                } else if (!state.ready) {
+                    Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (!state.error) CircularProgressIndicator(color = accent, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Text(state.message, color = Paper, modifier = Modifier.padding(16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        if (state.error) Button(onClick = { engine.start() }) { Text("Retry") }
+                    }
                 }
             }
-            Row(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.clip(CircleShape).background(Ink.copy(alpha = 0.65f)).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(5.dp).background(accent, CircleShape))
-                    Spacer(Modifier.width(7.dp))
-                    MicroText(if (!state.ready) "STILL / 01" else if (settings.look == Look.PURE && state.info.raw) "RAW + JPEG" else "JPEG", Paper)
+        }
+        // Format, grid and live exposure are outside the image, in fixed positions.
+        Row(Modifier.fillMaxWidth().height(42.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            MicroText(if (!state.ready) "CAMERA" else if (settings.look == Look.PURE && state.info.raw) "RAW + JPEG" else "JPEG", Muted)
+            Spacer(Modifier.weight(1f))
+            if (state.ready && workspace == Workspace.PRO) {
+                MicroText("${state.iso} ISO  ·  ${CaptureMath.shutterLabel(state.shutterNs)}", Muted)
+                Spacer(Modifier.width(12.dp))
+            }
+            IconButton(onClick = { grid = !grid }, modifier = Modifier.size(40.dp)) { Glyph("grid", if (grid) accent else Muted, Modifier.size(18.dp)) }
+        }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Look.entries.forEach { look ->
+                    ModeTab(if (look == Look.PURE) "Pure" else "Bloom", settings.look == look, accent, !state.busy) {
+                        change(settings.copy(look = look))
+                        feelingOpen = false
+                        haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    }
                 }
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = { grid = !grid }, modifier = Modifier.size(44.dp).background(Ink.copy(alpha = 0.65f), CircleShape)) {
-                    Glyph("grid", if (grid) accent else Paper)
+                if (settings.look == Look.BLOOM) TextButton(enabled = !state.busy, onClick = { feelingOpen = !feelingOpen; activeControl = null }) {
+                    Text("Feeling ${(settings.bloom * 100).roundToInt()}%", color = accent, fontSize = 12.sp)
                 }
             }
-            if (state.ready) {
-                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp)) {
-                    if (workspace == Workspace.PRO) {
-                        ProControls(state, settings, activeControl, accent, onSelect = { activeControl = it }, onChange = ::change)
-                    } else {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-                            Column {
-                                MicroText(if (settings.look == Look.PURE) "LESS, BUT TRUE." else "LET THE WORLD BLOOM.", Paper)
-                                Text(if (settings.look == Look.PURE) "A moment. As it is." else "A little more wonder.", color = Paper.copy(alpha = 0.7f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                            }
-                            MicroText("${state.iso} ISO\n${CaptureMath.shutterLabel(state.shutterNs)}", Paper)
-                        }
-                    }
+            if (settings.look == Look.BLOOM && feelingOpen) {
+                PrecisionSlider(settings.bloom, "Bloom intensity", accent, !state.busy) { change(settings.copy(bloom = it)) }
+            }
+            if (workspace == Workspace.PRO && state.ready) {
+                ProControls(state, settings, activeControl, accent,
+                    onSelect = { activeControl = if (activeControl == it) null else it; feelingOpen = false }, onChange = ::change)
+            }
+            Row(Modifier.fillMaxWidth().height(100.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceAround) {
+                GalleryButton(state.savedUri)
+                Box(Modifier.size(80.dp).border(1.5.dp, if (state.ready) Paper else Muted, CircleShape).padding(6.dp)
+                    .clip(CircleShape).background(if (state.ready) Paper else Color(0xFF34382F))
+                    .semantics { contentDescription = if (state.busy) "Saving photo" else "Take photo" }
+                    .clickable(enabled = state.ready && !state.busy, role = Role.Button) {
+                        haptic.performHapticFeedback(HapticFeedbackType.Confirm); engine.capture()
+                    }, contentAlignment = Alignment.Center) {
+                    if (state.busy) CircularProgressIndicator(Modifier.size(24.dp), color = Ink, strokeWidth = 2.dp)
+                    else Box(Modifier.size(6.dp).background(if (settings.look == Look.PURE) Color(0xFF667A40) else Color(0xFFAD6648), CircleShape))
+                }
+                IconButton(onClick = {
+                    change(settings.copy(iso = null, shutterNs = null, focus = null, exposure = 0)); engine.flip(); activeControl = null
+                }, enabled = state.ready && !state.busy && state.info.cameraCount > 1, modifier = Modifier.size(52.dp)) {
+                    Glyph("flip", if (state.info.cameraCount > 1) Paper else Muted.copy(alpha = 0.3f))
                 }
             }
-        }
-        }
-        Spacer(Modifier.height(18.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Look.entries.forEach { look ->
-                val selected = settings.look == look
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                    .background(if (selected) accent.copy(alpha = 0.1f) else Color.Transparent)
-                    .border(1.dp, if (selected) accent.copy(alpha = 0.4f) else Color(0xFF2A2E27), RoundedCornerShape(16.dp))
-                    .clickable(enabled = !state.busy, role = Role.Tab) { change(settings.copy(look = look)); haptic.performHapticFeedback(HapticFeedbackType.SegmentTick) }
-                    .padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Glyph(if (look == Look.PURE) "pure" else "bloom", if (selected) accent else Muted, Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (look == Look.PURE) "Pure" else "Bloom", color = if (selected) accent else Paper, fontSize = 20.sp, fontWeight = FontWeight.Medium)
-                        Spacer(Modifier.weight(1f))
-                        if (selected) Box(Modifier.size(5.dp).background(accent, CircleShape))
-                    }
-                    Text(if (look == Look.PURE) "Reality, with less." else "Reality, with feeling.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
-                }
-                if (look == Look.PURE) Spacer(Modifier.width(10.dp))
+            val status = when {
+                state.busy || state.error || state.message.startsWith("Saved") -> state.message
+                state.ready -> if (settings.look == Look.PURE && !state.info.raw) "RAW unavailable on this camera" else ""
+                else -> ""
             }
+            Text(status, color = if (state.error) Peach else Muted, fontSize = 11.sp, maxLines = 2,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(bottom = 8.dp))
         }
-        Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (settings.look == Look.BLOOM) {
-                MicroText("FEELING", Muted)
-                Slider(value = settings.bloom, onValueChange = { change(settings.copy(bloom = it)) }, enabled = !state.busy,
-                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp), colors = sliderColors(accent))
-                MicroText("${(settings.bloom * 100).roundToInt()}%", accent)
-            } else {
-                Box(Modifier.weight(1f).height(1.dp).background(Color(0xFF2A2E27)))
-                MicroText("  KEEP THE IMPERFECTIONS  ", Muted)
-                Box(Modifier.weight(1f).height(1.dp).background(Color(0xFF2A2E27)))
-            }
-        }
-        Row(Modifier.fillMaxWidth().height(91.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceAround) {
-            GalleryButton(state.savedUri)
-            Box(Modifier.size(84.dp).border(1.5.dp, accent.copy(alpha = if (state.ready) 1f else 0.3f), CircleShape).padding(6.dp)
-                .clip(CircleShape).background(if (state.ready) accent else accent.copy(alpha = 0.2f))
-                .semantics { contentDescription = "Take photo" }
-                .clickable(enabled = state.ready && !state.busy, role = Role.Button) {
-                    haptic.performHapticFeedback(HapticFeedbackType.Confirm); engine.capture()
-                }, contentAlignment = Alignment.Center) {
-                if (state.busy) CircularProgressIndicator(Modifier.size(27.dp), color = Ink, strokeWidth = 2.dp)
-                else Glyph("mark", Ink.copy(alpha = 0.65f), Modifier.size(27.dp))
-            }
-            IconButton(onClick = {
-                change(settings.copy(iso = null, shutterNs = null, focus = null, exposure = 0)); engine.flip()
-            }, enabled = state.ready && !state.busy && state.info.cameraCount > 1,
-                modifier = Modifier.size(52.dp).background(Color(0xFF232720), CircleShape)) {
-                Glyph("flip", if (state.info.cameraCount > 1) Paper else Muted.copy(alpha = 0.3f))
-            }
-        }
-        Text(if (granted) state.message else "MADE FOR THE WAY YOU SEE", color = if (state.error) Peach else Muted,
-            fontSize = 10.sp, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(top = 8.dp, bottom = 7.dp))
     }
     if (details) ModalBottomSheet(onDismissRequest = { details = false }, containerColor = Color(0xFF1D211B), contentColor = Paper) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 26.dp).padding(bottom = 40.dp)) {
-            MicroText("THE EIDOLON PHILOSOPHY", accent)
-            Text("Two ways to see.", fontSize = 32.sp, letterSpacing = (-1).sp, modifier = Modifier.padding(vertical = 16.dp))
-            Text("Pure keeps what the sensor saw. Bloom brings out what the moment felt like.", color = Muted, fontSize = 16.sp, lineHeight = 24.sp)
-            Spacer(Modifier.height(24.dp))
+            Text("Two ways to see.", fontSize = 28.sp, modifier = Modifier.padding(bottom = 16.dp))
+            Text("Pure keeps processing restrained. Bloom adds warm color and gentle contrast.", color = Muted, fontSize = 15.sp, lineHeight = 23.sp)
+            Spacer(Modifier.height(20.dp))
             Capability("Sensor RAW / DNG", if (state.ready) if (state.info.raw) "Available" else "Unavailable" else "Camera not open")
             Capability("Noise reduction off", if (state.ready && state.info.noiseOff) "Supported" else "Not confirmed")
             Capability("Sharpening off", if (state.ready && state.info.edgeOff) "Supported" else "Not confirmed")
             Capability("Manual exposure", if (state.ready && state.info.manual) "Supported" else "Not confirmed")
             Spacer(Modifier.height(20.dp))
-            Text("Pure saves a sensor DNG plus a companion JPEG when available. The JPEG and viewfinder still use the phone’s rendering pipeline. Hardware may apply processing even to RAW.\n\nBloom currently adds warm color, gentle contrast and richer saturation. Its preview is an approximation of the saved JPEG.\n\nPhotos stay in Pictures/Eidolon. No accounts, uploads or internet permission.", color = Muted, fontSize = 13.sp, lineHeight = 21.sp)
-            Spacer(Modifier.height(24.dp))
-            MicroText("EIDOLON / EARLY LIGHT / 0.1", accent)
+            Text("Pure saves a sensor DNG plus a companion JPEG when available. The JPEG and viewfinder use the phone’s rendering pipeline. Hardware may still apply processing to RAW.\n\nBloom grades the JPEG; its preview is an approximation. At 0% the original JPEG is preserved without recompression.\n\nPhotos stay in Pictures/Eidolon. No accounts or uploads.", color = Muted, fontSize = 13.sp, lineHeight = 21.sp)
         }
     }
 }
 
 @Composable
-private fun ProControls(state: CameraState, settings: CaptureSettings, selected: String, accent: Color, onSelect: (String) -> Unit, onChange: (CaptureSettings) -> Unit) {
+private fun ModeTab(label: String, chosen: Boolean, accent: Color, enabled: Boolean, onClick: () -> Unit) {
+    Column(Modifier.heightIn(min = 48.dp).selectable(selected = chosen, enabled = enabled, role = Role.Tab, onClick = onClick)
+        .padding(horizontal = 14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text(label, color = if (chosen) accent else Muted, fontSize = 14.sp, fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
+        Spacer(Modifier.height(5.dp))
+        Box(Modifier.size(width = 14.dp, height = 2.dp).background(if (chosen) accent else Color.Transparent, CircleShape))
+    }
+}
+
+@Composable
+private fun ProControls(state: CameraState, settings: CaptureSettings, selected: String?, accent: Color, onSelect: (String) -> Unit, onChange: (CaptureSettings) -> Unit) {
     val info = state.info
     val manual = settings.iso != null || settings.shutterNs != null
-    Column(Modifier.clip(RoundedCornerShape(16.dp)).background(Ink.copy(alpha = 0.88f)).padding(12.dp)) {
+    fun supported(control: String) = when (control) {
+        "EV" -> !manual && info.evMin < info.evMax
+        "FOCUS" -> info.focusMax > 0
+        else -> info.manual
+    }
+    Column {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            listOf("EV", "ISO", "S", "MF").forEach { control ->
-                val enabled = !state.busy && when (control) { "EV" -> !manual && info.evMin < info.evMax; "MF" -> info.focusMax > 0; else -> info.manual }
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
-                    .background(if (selected == control) accent.copy(alpha = 0.12f) else Color.Transparent)
-                    .clickable(enabled = enabled) { onSelect(control) }.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    MicroText(control, if (enabled) if (selected == control) accent else Paper else Muted.copy(alpha = 0.4f))
+            listOf("EV", "ISO", "SHUTTER", "FOCUS").forEach { control ->
+                val enabled = !state.busy && supported(control)
+                Column(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
+                    .selectable(selected = selected == control, enabled = enabled, role = Role.Tab) { onSelect(control) }
+                    .padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    MicroText(control, if (enabled) if (selected == control) accent else Muted else Muted.copy(alpha = 0.35f))
                     Text(when (control) {
                         "EV" -> if (manual) "—" else "%+.1f".format(java.util.Locale.US, settings.exposure * info.evStep)
-                        "ISO" -> settings.iso?.toString() ?: "AUTO"
-                        "S" -> settings.shutterNs?.let(CaptureMath::shutterLabel) ?: "AUTO"
-                        else -> if (settings.focus == null) "AUTO" else "%.1f D".format(java.util.Locale.US, settings.focus)
-                    }, color = if (enabled) Paper else Muted.copy(alpha = 0.4f), fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
+                        "ISO" -> settings.iso?.toString() ?: "Auto"
+                        "SHUTTER" -> settings.shutterNs?.let(CaptureMath::shutterLabel) ?: "Auto"
+                        else -> if (settings.focus == null) "Auto" else "%.1f D".format(java.util.Locale.US, settings.focus)
+                    }, color = if (enabled) Paper else Muted.copy(alpha = 0.35f), fontSize = 12.sp)
                 }
             }
         }
-        val supported = when (selected) { "EV" -> !manual && info.evMin < info.evMax; "MF" -> info.focusMax > 0; else -> info.manual }
-        if (supported) {
-            val value = when (selected) {
-                "EV" -> (settings.exposure - info.evMin).toFloat() / (info.evMax - info.evMin)
-                "ISO" -> normalized((settings.iso ?: state.iso).toDouble(), info.isoMin.toDouble(), info.isoMax.toDouble())
-                "S" -> normalized((settings.shutterNs ?: state.shutterNs).toDouble(), info.shutterMin.toDouble(), info.shutterMax.toDouble())
-                else -> (settings.focus ?: 0f) / info.focusMax
-            }.coerceIn(0f, 1f)
-            Slider(value = value, enabled = !state.busy, colors = sliderColors(accent), onValueChange = { v ->
-                onChange(when (selected) {
-                    "EV" -> settings.copy(exposure = (info.evMin + v * (info.evMax - info.evMin)).roundToInt())
-                    "ISO" -> settings.copy(iso = exponential(v, info.isoMin.toDouble(), info.isoMax.toDouble()).roundToInt(), shutterNs = settings.shutterNs ?: state.shutterNs.coerceIn(info.shutterMin, info.shutterMax))
-                    "S" -> settings.copy(shutterNs = exponential(v, info.shutterMin.toDouble(), info.shutterMax.toDouble()).toLong(), iso = settings.iso ?: state.iso.coerceIn(info.isoMin, info.isoMax))
-                    else -> settings.copy(focus = v * info.focusMax)
-                })
-            })
-        } else Text(if (selected == "EV" && manual) "EV is available with automatic exposure." else "This camera doesn’t expose this control.", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(vertical = 12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            MicroText("${state.iso} ISO · ${CaptureMath.shutterLabel(state.shutterNs)}", Muted)
-            Text("RESET AUTO", color = accent, fontSize = 10.sp, fontFamily = FontFamily.Monospace,
-                modifier = Modifier.clip(CircleShape).clickable(enabled = !state.busy) { onChange(settings.copy(iso = null, shutterNs = null, focus = null, exposure = 0)) }.padding(10.dp))
+        if (selected != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (supported(selected)) {
+                    val value = when (selected) {
+                        "EV" -> (settings.exposure - info.evMin).toFloat() / (info.evMax - info.evMin)
+                        "ISO" -> normalized((settings.iso ?: state.iso).toDouble(), info.isoMin.toDouble(), info.isoMax.toDouble())
+                        "SHUTTER" -> normalized((settings.shutterNs ?: state.shutterNs).toDouble(), info.shutterMin.toDouble(), info.shutterMax.toDouble())
+                        else -> (settings.focus ?: 0f) / info.focusMax
+                    }.coerceIn(0f, 1f)
+                    Box(Modifier.weight(1f)) {
+                        PrecisionSlider(value, "$selected adjustment", accent, !state.busy) { v ->
+                            onChange(when (selected) {
+                                "EV" -> settings.copy(exposure = (info.evMin + v * (info.evMax - info.evMin)).roundToInt())
+                                "ISO" -> settings.copy(iso = exponential(v, info.isoMin.toDouble(), info.isoMax.toDouble()).roundToInt(), shutterNs = settings.shutterNs ?: state.shutterNs.coerceIn(info.shutterMin, info.shutterMax))
+                                "SHUTTER" -> settings.copy(shutterNs = exponential(v, info.shutterMin.toDouble(), info.shutterMax.toDouble()).toLong(), iso = settings.iso ?: state.iso.coerceIn(info.isoMin, info.isoMax))
+                                else -> settings.copy(focus = v * info.focusMax)
+                            })
+                        }
+                    }
+                } else Text("Use Auto for EV", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                TextButton(enabled = !state.busy, onClick = { onChange(settings.copy(iso = null, shutterNs = null, focus = null, exposure = 0)) }) {
+                    Text("Auto", color = accent, fontSize = 12.sp)
+                }
+            }
         }
     }
 }
@@ -324,10 +310,19 @@ private fun normalized(value: Double, min: Double, max: Double): Float =
     if (max <= min) 0f else (ln(value.coerceIn(min, max) / min) / ln(max / min)).toFloat()
 private fun exponential(value: Float, min: Double, max: Double): Double = min * exp(value * ln(max / min))
 
-@Composable private fun sliderColors(accent: Color) = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent, inactiveTrackColor = Color(0xFF41473B))
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun PrecisionSlider(value: Float, label: String, accent: Color, enabled: Boolean, onChange: (Float) -> Unit) {
+    Slider(value = value, onValueChange = onChange, enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(48.dp).semantics { contentDescription = label },
+        colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent, inactiveTrackColor = Color(0xFF41473B)),
+        thumb = { Box(Modifier.size(16.dp).background(if (enabled) accent else Muted, CircleShape)) },
+        track = { slider -> SliderDefaults.Track(sliderState = slider, modifier = Modifier.height(3.dp),
+            colors = SliderDefaults.colors(activeTrackColor = accent, inactiveTrackColor = Color(0xFF41473B)),
+            enabled = enabled, drawStopIndicator = null, thumbTrackGapSize = 4.dp) })
+}
 
 @Composable private fun MicroText(text: String, color: Color) {
-    Text(text, color = color, fontSize = 9.sp, letterSpacing = 1.sp, fontFamily = FontFamily.Monospace, lineHeight = 16.sp)
+    Text(text, color = color, fontSize = 10.sp, letterSpacing = 0.7.sp, fontFamily = FontFamily.Monospace, lineHeight = 16.sp)
 }
 
 @Composable private fun Capability(label: String, value: String) {
