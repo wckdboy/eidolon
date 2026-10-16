@@ -20,6 +20,7 @@ Get **[v0.1.0-alpha.2 — Clear View](https://github.com/wckdboy/eidolon/release
 | `README.md` | These setup instructions, features, and known limits. |
 | `SHA256SUMS` | Download checksums. |
 | `BUILD-INFO.txt` | Source commit, build versions, validation, and signing certificate fingerprint. |
+| `mapping.txt.gz` | R8 mapping for decoding crash stack traces from this release. |
 
 Download an APK on your Android phone, open it, and allow installation from your browser or file manager when Android asks. APKs support Android 10 and newer. The release app uses `studio.eidolon.camera`; the debug app uses `studio.eidolon.camera.debug`.
 
@@ -51,19 +52,19 @@ python3 scripts/create-signing-key.py
 ./gradlew :app:assembleDebug :app:assembleRelease :app:testDebugUnitTest :app:lintDebug :app:lintRelease
 ```
 
-The script refuses to overwrite existing signing material. With `.signing/release.properties` present, `assembleRelease` generates a signed APK at `app/build/outputs/apk/release/app-release.apk`. Without local signing material, Gradle produces an unsigned release APK, which must be signed before distribution. The debug APK is under `app/build/outputs/apk/debug/app-debug.apk`.
+The script refuses to overwrite existing signing material. With `.signing/release.properties` present, `assembleRelease` generates a signed APK at `app/build/outputs/apk/release/app-release.apk`. Without local signing material, Gradle produces an unsigned release APK, which must be signed before distribution. The debug APK is under `app/build/outputs/apk/debug/app-debug.apk`. Release builds enable [R8 code and resource optimization](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization); debug builds retain development tooling. Archive `app/build/outputs/mapping/release/mapping.txt` with each release to decode optimized stack traces.
 
 ## Capture architecture
 
 `CaptureModel.kt` holds capture intent, capabilities, orientation math, and Bloom rendering coefficients. `CameraEngine.kt` confines Camera2 lifecycle and frame matching to a camera thread. Capture results, RAW images, and JPEGs must have matching, non-null sensor timestamps before saving. Capture settings are frozen for each shot; only one save is in flight. Failed writes remove their MediaStore entries. Reader leases keep in-flight RAW images valid while the camera shuts down; readers close after the save releases its image.
 
-`PhotoStore.kt` writes DNG/JPEG pairs through pending MediaStore entries. DNG encoding and Bloom rendering run on a separate worker. DNGs write directly into MediaStore without a temporary DNG file and second copy. Bloom reads source EXIF from memory, releases its source bitmap before encoding, and skips rendering and recompression entirely at 0%. The UI gets immutable capability and metering snapshots. Capture and composition state are separate from Android storage and presentation, providing a starting point for a later native iOS implementation.
+`PhotoStore.kt` writes DNG/JPEG pairs through pending MediaStore entries. DNG encoding and Bloom rendering run on a separate worker. DNGs write directly into MediaStore without a temporary DNG file and second copy. Bloom reads source EXIF from memory, releases its source bitmap before encoding, and skips rendering and recompression entirely at 0%. Zero-strength Bloom also bypasses the preview color-filter layer. The UI gets immutable capability and metering snapshots. Capture and composition state are separate from Android storage and presentation, providing a starting point for a later native iOS implementation.
 
 ## Current UI and responsiveness improvements
 
 Alpha.2 introduces a quieter, image-first layout: compact Pure/Bloom tabs, a smaller header, neutral shutter, and Pro controls below the viewfinder. Tap a Pro control to reveal its slider, or tap Feeling in Bloom to adjust the grade. The preview has no decorative gradient or captions over the photograph. Fun resets manual controls and EV; the last photo is remembered across launches.
 
-Bloom intensity changes update the preview without resubmitting sensor controls. Sensor updates are coalesced over 16 ms, identical UI snapshots are skipped, and completed capture timeouts are cancelled immediately. These changes remove avoidable work; real-device speed and memory benchmarks remain to be collected.
+Bloom intensity changes update the preview without resubmitting sensor controls. Sensor updates are coalesced over 16 ms, identical UI snapshots are skipped, and completed capture timeouts are cancelled immediately. These changes remove avoidable work; real-device speed and memory benchmarks remain to be collected. R8 reduces the universal release APK from 23.02 MB to about 1.91 MB (92% smaller); this is a measured package-size reduction, not a measured capture-speed improvement.
 
 ## Honest limits of this first build
 
@@ -81,12 +82,12 @@ Start with one reference Android phone and a fixed collection of daylight, skin,
 
 ## Validation
 
-The debug build, eight unit tests (color, orientation, timestamp matching, sensor-control changes, and concurrent reader ownership), and Android lint are runnable with the command above. Five Android instrumentation tests cover original-byte preservation, zero-strength Bloom, graded JPEG metadata, storage-failure rollback, and saving while the camera closes followed by reopening for another capture. Run them on a connected emulator or phone with `./gradlew :app:connectedDebugAndroidTest`. Lint currently emits non-blocking warnings, including the portrait layout and platform EXIF API. Hardware acceptance testing remains required before a production release.
+The debug build, eight unit tests (color, orientation, timestamp matching, sensor-control changes, and concurrent reader ownership), and Android lint are runnable with the command above. Five Android instrumentation tests cover original-byte preservation, zero-strength Bloom, graded JPEG metadata, storage-failure rollback, and saving while the camera closes followed by reopening for another capture. Run them on a connected emulator or phone with `./gradlew :app:connectedDebugAndroidTest`. The optimized release has a separate startup/preview lifecycle smoke test: `./gradlew -PtestBuildType=release :app:connectedReleaseAndroidTest`. It requires local release signing material. Lint currently emits non-blocking warnings, including the portrait layout and platform EXIF API. Hardware acceptance testing remains required before a production release.
 
 In alpha.1, on an API 36.1 emulator, the permission flow, live preview, camera switching, background/resume recovery, Pure DNG + JPEG capture, and Bloom JPEG capture were exercised. Both JPEGs decoded successfully with orientation preserved. The DNG contained a CFA photometric tag and DNG version metadata. A Pro capture requested ISO 469 and the saved JPEG reported ISO 469. No runtime crashes were logged during these checks. Synthetic emulator scenes were used; these checks do not establish photographic quality.
 
 Alpha.1 interface captures (the current layout has changed): [Pure / Fun](https://github.com/wckdboy/eidolon/blob/main/artifacts/screenshots/pure.png) and [Bloom / Pro](https://github.com/wckdboy/eidolon/blob/main/artifacts/screenshots/bloom-pro.png).
 
-Alpha.2 passed all eight unit tests and five instrumentation tests on a fresh API 36.1 emulator. The capture integration test saved a DNG/JPEG pair while closing the camera, decoded the JPEG, checked DNG dimensions, reopened the camera, and saved a Bloom JPEG. Both build variants and lint checks completed successfully.
+Alpha.2 passed all eight unit tests and five instrumentation tests on a fresh API 36.1 emulator. The capture integration test saved a DNG/JPEG pair while closing the camera, decoded the JPEG, checked DNG dimensions, reopened the camera, and saved a Bloom JPEG. A separate smoke test against the optimized release APK verified changing camera frames after startup, activity recreation, and closing/reopening the app. All 14 checks (eight unit tests, five debug instrumentation tests, and one release smoke test) passed. Both build variants and lint checks completed successfully.
 
 Alpha.2 visual inspection remains pending: the computer-control tool could not access the emulator window. Real-phone latency, color, and memory benchmarks remain unmeasured.

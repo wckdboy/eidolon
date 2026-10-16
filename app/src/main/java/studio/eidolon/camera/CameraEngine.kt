@@ -108,7 +108,7 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     }
     private fun applyPreviewLookNow() {
         if (destroyed) return
-        val paint = if (settings.look == Look.BLOOM) Paint().apply {
+        val paint = if (settings.look == Look.BLOOM && settings.bloom > 0f) Paint().apply {
             colorFilter = ColorMatrixColorFilter(BloomColor.matrix(settings.bloom))
         } else null
         view?.setLayerType(if (paint == null) android.view.View.LAYER_TYPE_NONE else android.view.View.LAYER_TYPE_HARDWARE, paint)

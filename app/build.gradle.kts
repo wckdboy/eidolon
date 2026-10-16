@@ -5,6 +5,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val testedBuildType = providers.gradleProperty("testBuildType").getOrElse("debug")
+
 android {
     namespace = "studio.eidolon.camera"
     compileSdk = 37
@@ -14,9 +16,11 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "0.1.0-alpha.2"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (testedBuildType == "release")
+            "studio.eidolon.smoke.ReleaseSmokeInstrumentation" else "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true }
+    testBuildType = testedBuildType
     val signingFile = rootProject.file(".signing/release.properties")
     if (signingFile.exists()) {
         val signing = Properties().apply { signingFile.inputStream().use { load(it) } }
@@ -36,6 +40,7 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
+            optimization { enable = true }
             if (signingFile.exists()) signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -53,6 +58,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test:runner:1.7.0")
-    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    if (testedBuildType == "debug") {
+        androidTestImplementation("androidx.test:runner:1.7.0")
+        androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    }
 }
