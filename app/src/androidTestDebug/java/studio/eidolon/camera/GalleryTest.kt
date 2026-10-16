@@ -77,7 +77,9 @@ class GalleryTest {
     }
 
     @Test fun galleryViewerDetailsDeleteAndReturnToLiveCamera() {
-        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        }
         val store = GalleryStore(context)
         val preferences = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
         val previousPhoto = preferences.getString("lastPhoto", null)

@@ -41,7 +41,9 @@ class CameraEngineTest {
     } }
 
     @Test fun rawSaveSurvivesCameraClosureAndReopeningAllowsBloomCapture() {
-        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        }
         val before = photos()
         val prefs = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
         val previousPhoto = prefs.getString("lastPhoto", null)
@@ -84,7 +86,9 @@ class CameraEngineTest {
     }
 
     @Test fun writerQueueAllowsAnotherShotAndStopsAtCapacity() {
-        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        }
         val capacity = if (context.getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 1 else 2
         val before = photos()
         val prefs = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
@@ -132,7 +136,9 @@ class CameraEngineTest {
     }
 
     @Test fun repeatedCapturesAfterRapidAdjustmentsAndLensSwitching() {
-        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        }
         val before = photos()
         val prefs = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
         val previousPhoto = prefs.getString("lastPhoto", null)

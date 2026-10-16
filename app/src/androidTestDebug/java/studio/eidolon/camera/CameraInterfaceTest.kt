@@ -19,7 +19,9 @@ class CameraInterfaceTest {
     @Test fun modeChangesKeepPreviewAttachedAndChoicesSurviveRelaunch() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        }
         val preferences = context.getSharedPreferences("ui", Context.MODE_PRIVATE)
         val original = UiPreferencesStore(preferences).load()
         UiPreferencesStore(preferences).save(UiPreferences())
@@ -43,7 +45,12 @@ class CameraInterfaceTest {
                 scenario.onActivity { assertSame("Mode changes must not recreate the preview", preview, texture(it.window.decorView)) }
             }
             ActivityScenario.launch(MainActivity::class.java).use {
-                compose.waitUntil(10_000) { compose.onAllNodesWithText("Bloom").fetchSemanticsNodes().isNotEmpty() }
+                // Frame controls only exist once the reopened camera is ready.
+                compose.waitUntil(20_000) {
+                    compose.onAllNodesWithContentDescription("Take photo").fetchSemanticsNodes().any {
+                        !it.config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled)
+                    }
+                }
                 compose.onNodeWithText("Pro").assertIsSelected()
                 compose.onNodeWithText("Bloom").assertIsSelected()
                 compose.onNodeWithText("80%").assertExists()
