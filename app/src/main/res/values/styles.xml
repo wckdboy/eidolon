@@ -4,7 +4,7 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">#080A0C</item>
-        <item name="android:colorAccent">#D6FF75</item>
+        <item name="android:windowBackground">#090909</item>
+        <item name="android:colorAccent">#F4F4F6</item>
     </style>
 </resources>

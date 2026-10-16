@@ -10,10 +10,14 @@ class CameraHarnessActivity : ComponentActivity() {
     val states = LinkedBlockingQueue<CameraState>()
     lateinit var engine: CameraEngine
     var closeWhenSaving = false
+    @Volatile var beforeSave: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        engine = CameraEngine(applicationContext) { state ->
+        engine = CameraEngine(applicationContext, savePhoto = { jpeg, raw, settings ->
+            beforeSave?.invoke()
+            PhotoStore(applicationContext).save(jpeg, raw, settings)
+        }) { state ->
             if (closeWhenSaving && state.message == "Saving…") {
                 closeWhenSaving = false
                 engine.stop()

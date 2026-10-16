@@ -83,6 +83,54 @@ class CameraEngineTest {
         }
     }
 
+    @Test fun writerQueueAllowsAnotherShotAndStopsAtCapacity() {
+        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        val capacity = if (context.getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 1 else 2
+        val before = photos()
+        val prefs = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
+        val previousPhoto = prefs.getString("lastPhoto", null)
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val writes = java.util.concurrent.atomic.AtomicInteger()
+        try {
+            ActivityScenario.launch(CameraHarnessActivity::class.java).use { scenario ->
+                lateinit var queue: LinkedBlockingQueue<CameraState>
+                scenario.onActivity { queue = it.states }
+                val ready = awaitState(queue) { it.ready }
+                scenario.onActivity { activity ->
+                    activity.beforeSave = {
+                        writes.incrementAndGet(); entered.countDown()
+                        check(gate.await(20, TimeUnit.SECONDS)) { "Test writer gate timed out" }
+                    }
+                    activity.engine.capture()
+                }
+                val first = awaitState(queue) { it.saving == 1 }
+                assertEquals(capacity == 1, first.busy)
+                assertTrue(entered.await(10, TimeUnit.SECONDS))
+                if (capacity == 2) {
+                    scenario.onActivity { it.engine.capture() }
+                    assertTrue(awaitState(queue) { it.saving == 2 }.busy)
+                }
+                scenario.onActivity { repeat(5) { _ -> it.engine.capture() } }
+                // Wait for those commands to be processed while the writer remains blocked.
+                SystemClock.sleep(250)
+                assertEquals(1, writes.get())
+                assertTrue(queue.none { it.saving > capacity || (it.saving == capacity && !it.busy) })
+                gate.countDown()
+                awaitState(queue) { it.saving == 0 && !it.busy && it.message.startsWith("Saved") }
+                assertEquals(capacity, writes.get())
+                assertEquals(capacity * if (ready.info.raw) 2 else 1, (photos() - before).size)
+                val captures = kotlinx.coroutines.runBlocking { GalleryStore(context).photos() }.filter { Uri.parse(it.uri) in photos() - before }
+                assertEquals(capacity, captures.size)
+                assertEquals(ready.info.raw, captures.all { it.rawUri != null })
+            }
+        } finally {
+            gate.countDown()
+            (photos() - before).forEach { context.contentResolver.delete(it, null, null) }
+            prefs.edit().putString("lastPhoto", previousPhoto).commit()
+        }
+    }
+
     @Test fun repeatedCapturesAfterRapidAdjustmentsAndLensSwitching() {
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
         val before = photos()

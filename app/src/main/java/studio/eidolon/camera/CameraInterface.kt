@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -41,12 +42,14 @@ internal fun CameraInterface(
     onChange: (CaptureSettings) -> Unit = {}, onWorkspace: (Workspace) -> Unit = {},
     onGrid: (Boolean) -> Unit = {}, onControl: (String) -> Unit = {}, onFeeling: () -> Unit = {},
     onDetails: (Boolean) -> Unit = {}, onPermission: () -> Unit = {}, onRetry: () -> Unit = {},
-    onCapture: () -> Unit = {}, onFlip: () -> Unit = {}, preview: @Composable () -> Unit = {},
+    onCapture: () -> Unit = {}, onGallery: () -> Unit = {}, onFlip: () -> Unit = {}, preview: @Composable () -> Unit = {},
 ) {
-    val accent by animateColorAsState(if (settings.look == Look.PURE) Acid else Peach, tween(140), label = "intent")
-    Box(Modifier.fillMaxSize().background(Ink), contentAlignment = Alignment.TopCenter) {
+    val accent by animateColorAsState(if (settings.look == Look.PURE) Paper else BloomViolet, tween(140), label = "intent")
+    val vivid = settings.look == Look.BLOOM
+    val glow by animateColorAsState(if (vivid) Color(0xFF382040) else Color(0xFF222224), tween(240), label = "glass light")
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Ink, Ink, glow))), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 600.dp).fillMaxSize().safeDrawingPadding()) {
-            CameraHeader(workspace, !state.busy, onWorkspace, { onDetails(true) })
+            CameraHeader(workspace, !state.busy, accent, vivid, onWorkspace, { onDetails(true) })
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
                 val ratio = state.info.aspectRatio
                 val frameWidth = minOf(maxWidth, maxHeight * ratio)
@@ -60,7 +63,7 @@ internal fun CameraInterface(
             CameraReadout(state, settings.look, workspace, grid, accent, onGrid)
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Row(Modifier.clip(CircleShape).background(SurfaceInk).border(1.dp, EdgeInk, CircleShape)
+                    Row(Modifier.glass(CircleShape, vivid)
                         .selectableGroup().padding(3.dp)) {
                         Look.entries.forEach { look ->
                             IntentTab(look, settings.look == look, accent, !state.busy) {
@@ -89,14 +92,14 @@ internal fun CameraInterface(
                 Row(Modifier.fillMaxWidth().height(104.dp), horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        GalleryButton(state.savedUri)
+                        GalleryButton(state.savedUri, enabled = !state.busy, onOpen = onGallery)
                         Spacer(Modifier.height(7.dp))
                         MicroText("LIBRARY", Muted)
                     }
-                    Shutter(state.ready, state.busy, accent, onCapture)
+                    Shutter(state.ready, state.busy, state.saving, vivid, accent, onCapture)
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         IconButton(onClick = onFlip, enabled = state.ready && !state.busy && state.info.cameraCount > 1,
-                            modifier = Modifier.size(52.dp).background(SurfaceInk, CircleShape).border(1.dp, EdgeInk, CircleShape)) {
+                            modifier = Modifier.size(52.dp).glass(CircleShape, vivid)) {
                             Glyph("flip", if (state.ready && state.info.cameraCount > 1) Paper else Muted.copy(alpha = 0.4f))
                         }
                         Spacer(Modifier.height(7.dp))
@@ -104,6 +107,7 @@ internal fun CameraInterface(
                     }
                 }
                 val status = when {
+                    state.saving > 0 && !state.error -> "${state.saving} ${if (state.saving == 1) "photo" else "photos"} developing" + if (!state.busy && state.ready) " · keep shooting" else ""
                     state.busy || (state.ready && state.error) || (state.ready && state.message.startsWith("Saved")) -> state.message
                     state.ready && settings.look == Look.PURE && !state.info.raw -> "RAW unavailable · capturing JPEG"
                     else -> ""
@@ -117,15 +121,15 @@ internal fun CameraInterface(
 }
 
 @Composable
-private fun CameraHeader(workspace: Workspace, enabled: Boolean, onWorkspace: (Workspace) -> Unit, onInfo: () -> Unit) {
+private fun CameraHeader(workspace: Workspace, enabled: Boolean, accent: Color, vivid: Boolean, onWorkspace: (Workspace) -> Unit, onInfo: () -> Unit) {
     val showWordmark = LocalDensity.current.fontScale < 1.4f
     Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Glyph("mark", Acid, Modifier.size(25.dp).semantics { contentDescription = "Eidolon" })
+            Glyph("mark", accent, Modifier.size(25.dp).semantics { contentDescription = "Eidolon" })
             if (showWordmark) Text("eidolon", color = Paper, fontSize = 20.sp, letterSpacing = (-0.8).sp,
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 9.dp))
         }
-        Row(Modifier.clip(CircleShape).background(SurfaceInk).selectableGroup().padding(3.dp)) {
+        Row(Modifier.glass(CircleShape, vivid).selectableGroup().padding(3.dp)) {
             Workspace.entries.forEach { mode ->
                 val selected = mode == workspace
                 Box(Modifier.width(56.dp).height(48.dp).clip(CircleShape)
@@ -185,7 +189,7 @@ private fun CompositionGrid() {
 }
 
 @Composable
-private fun Shutter(ready: Boolean, busy: Boolean, accent: Color, onCapture: () -> Unit) {
+private fun Shutter(ready: Boolean, busy: Boolean, saving: Int, vivid: Boolean, accent: Color, onCapture: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(90), label = "shutter press")
@@ -194,10 +198,11 @@ private fun Shutter(ready: Boolean, busy: Boolean, accent: Color, onCapture: () 
         .semantics { contentDescription = if (busy) "Saving photo" else "Take photo" }
         .clip(CircleShape).clickable(interactionSource = interaction, indication = null,
             enabled = ready && !busy, role = Role.Button, onClick = onCapture), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(70.dp).background(if (ready) Paper else EdgeInk, CircleShape), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(70.dp).background(Brush.linearGradient(
+            if (!ready) listOf(EdgeInk, EdgeInk) else if (vivid) listOf(BloomBlue, BloomViolet, BloomPink) else listOf(Color.White, Color(0xFFD1D1D5))), CircleShape), contentAlignment = Alignment.Center) {
             Glyph("mark", if (ready) Ink else Muted, Modifier.size(22.dp))
         }
-        if (busy) CircularProgressIndicator(Modifier.size(84.dp), color = accent, strokeWidth = 2.dp)
+        if (busy || saving > 0) CircularProgressIndicator(Modifier.size(84.dp), color = accent, strokeWidth = 2.dp)
     }
 }
 

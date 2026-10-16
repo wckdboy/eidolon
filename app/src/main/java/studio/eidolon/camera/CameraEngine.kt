@@ -16,12 +16,19 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 
 /** Camera2 owns capture. The UI never fabricates support or labels a JPEG as RAW. */
-class CameraEngine(private val context: Context, private val onState: (CameraState) -> Unit) {
+class CameraEngine(private val context: Context,
+    private val savePhoto: (ByteArray, ((java.io.OutputStream) -> Unit)?, CaptureSettings) -> android.net.Uri = PhotoStore(context)::save,
+    private val onState: (CameraState) -> Unit) {
     private val manager = context.getSystemService(CameraManager::class.java)
     private val thread = HandlerThread("EidolonCamera").apply { start() }
     private val handler = Handler(thread.looper)
     private val main = Handler(Looper.getMainLooper())
-    private val writer = Executors.newSingleThreadExecutor()
+    private val writer = Executors.newSingleThreadExecutor { task ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "EidolonWriter")
+    }
     private var state = CameraState()
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
@@ -35,6 +42,9 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     private var active = false
     private var opening = false
     private var pending: Pending? = null
+    private var savingCount = 0
+    private val saveCapacity = if (context.getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 1 else 2
+    private fun occupied() = pending != null || savingCount >= saveCapacity
     private var lastMetering = 0L
     private var captureTimeout: Runnable? = null
     @Volatile private var destroyed = false
@@ -353,10 +363,11 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
         val lease = if (image != null) requireNotNull(rawOwner).acquire() else null
         pending = null
         clearCaptureTimeout()
-        publish(state.copy(message = "Saving…"))
+        savingCount++
+        publish(state.copy(busy = occupied(), saving = savingCount, message = "Saving…"))
         try {
             writer.execute {
-                try {
+                val outcome = runCatching {
                     val writeRaw: ((java.io.OutputStream) -> Unit)? = image?.let { rawImage ->
                         { output ->
                             DngCreator(c, result).use { dng ->
@@ -365,15 +376,30 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
                             }
                         }
                     }
-                    val uri = PhotoStore(context).save(jpeg, writeRaw, job.settings)
-                    preferences.edit().putString("lastPhoto", uri.toString()).apply()
-                    handler.post { publish(state.copy(busy = false, savedUri = uri.toString(), error = false,
-                        message = if (image != null) "Saved · DNG + JPEG" else "Saved · ${job.settings.look.name.lowercase().replaceFirstChar { it.uppercase() }} JPEG")) }
-                } catch (e: Exception) {
-                    handler.post { publish(state.copy(busy = false, error = true, message = "Couldn’t save: ${e.message ?: "storage unavailable"}")) }
-                } finally { image?.close(); lease?.close() }
+                    savePhoto(jpeg, writeRaw, job.settings).also { uri ->
+                        preferences.edit().putString("lastPhoto", uri.toString()).apply()
+                    }
+                }
+                // Release the reader before advertising queue capacity, including failed writes.
+                runCatching { image?.close() }
+                runCatching { lease?.close() }
+                handler.post {
+                    savingCount--
+                    outcome.onSuccess { uri ->
+                        // A completed older save must not hide a newer capture/camera failure.
+                        publish(state.copy(busy = occupied(), saving = savingCount, savedUri = uri.toString(),
+                            message = if (state.error || pending != null) state.message else if (image != null) "Saved · DNG + JPEG"
+                                else "Saved · ${job.settings.look.name.lowercase().replaceFirstChar { it.uppercase() }} JPEG"))
+                    }.onFailure { failure ->
+                        publish(state.copy(busy = occupied(), saving = savingCount, error = true, message = "Couldn’t save: ${failure.message ?: "storage unavailable"}"))
+                    }
+                }
             }
-        } catch (e: Exception) { image?.close(); lease?.close(); captureFailed("Couldn’t save: ${e.message}") }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            savingCount--
+            runCatching { image?.close() }; runCatching { lease?.close() }
+            captureFailed("Couldn’t save: ${e.message}")
+        }
     }
 
     private fun clearCaptureTimeout() {
@@ -383,7 +409,7 @@ class CameraEngine(private val context: Context, private val onState: (CameraSta
     private fun captureFailed(message: String) {
         clearCaptureTimeout()
         pending?.raw?.close(); pending = null
-        publish(state.copy(busy = false, error = true, message = message))
+        publish(state.copy(busy = occupied(), saving = savingCount, error = true, message = message))
     }
     private fun fail(message: String) {
         closeCamera()

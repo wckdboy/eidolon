@@ -38,6 +38,7 @@ data class CameraInfo(
 data class CameraState(
     val ready: Boolean = false,
     val busy: Boolean = false,
+    val saving: Int = 0,
     val info: CameraInfo = CameraInfo(),
     val message: String = "Your eye. Your reality.",
     val error: Boolean = false,

@@ -56,7 +56,7 @@ private val ready = CameraState(ready = true, iso = 100, shutterNs = 8_000_000,
 @PreviewTest
 @Preview(name = "Saving", widthDp = 390, heightDp = 844, showBackground = true)
 @Composable fun SavingPreview() { EidolonTheme {
-    CameraInterface(state = ready.copy(busy = true, message = "Saving…"), preview = { PreviewScene() })
+    CameraInterface(state = ready.copy(saving = 1, message = "Saving…"), preview = { PreviewScene() })
 } }
 
 /** An abstract architectural test scene; never included in the production camera preview. */
@@ -72,3 +72,19 @@ private val ready = CameraState(ready = true, iso = 100, shutterNs = 8_000_000,
         drawPath(Path().apply { moveTo(w * .4f, h * .82f); lineTo(w * .89f, h); lineTo(w * .65f, h); lineTo(w * .14f, h * .82f); close() }, Color(0xFF8B806A))
     }
 }
+
+private val gallerySamples = List(12) { index -> GalleryPhoto(index.toLong(), "preview:$index",
+    "EIDOLON_${index}_${if (index % 3 == 0) "BLOOM" else "PURE"}.jpg", 1760000000000L,
+    4000, 3000, 3500000, if (index % 3 != 0) "raw:$index" else null) }
+
+@PreviewTest
+@Preview(name = "Gallery", widthDp = 390, heightDp = 844, showBackground = true)
+@Composable fun GalleryPreview() { EidolonTheme { GalleryInterface(gallerySamples) { PreviewScene() } } }
+
+@PreviewTest
+@Preview(name = "Empty gallery", widthDp = 320, heightDp = 640, fontScale = 1.5f, showBackground = true)
+@Composable fun EmptyGalleryPreview() { EidolonTheme { GalleryInterface(emptyList()) } }
+
+@PreviewTest
+@Preview(name = "Photo viewer", widthDp = 390, heightDp = 844, showBackground = true)
+@Composable fun PhotoViewerPreview() { EidolonTheme { PhotoViewer(gallerySamples, 1) { _, _ -> PreviewScene() } } }

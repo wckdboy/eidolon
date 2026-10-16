@@ -66,6 +66,11 @@ class PhotoStoreTest {
         } finally { original.recycle(); rendered.recycle() }
         val exif = ByteArrayInputStream(output).use { ExifInterface(it) }
         assertEquals(6, exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, 0))
+        assertEquals(64, exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0))
+        assertEquals(48, exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0))
+        assertEquals(64, exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0))
+        assertEquals(48, exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0))
+        assertFalse(exif.hasThumbnail())
         assertEquals(400, exif.getAttributeInt(ExifInterface.TAG_ISO_SPEED_RATINGS, 0))
         assertEquals(0.008, exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0), 0.00001)
     }

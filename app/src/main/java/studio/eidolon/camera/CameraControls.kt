@@ -45,7 +45,8 @@ internal fun ProControls(state: CameraState, settings: CaptureSettings, selected
             listOf("EV", "ISO", "SHUTTER", "FOCUS").forEach { control ->
                 val enabled = !state.busy && supported(control)
                 Column(Modifier.weight(1f).heightIn(min = 58.dp).clip(RoundedCornerShape(14.dp))
-                    .background(if (selected == control) accent.copy(alpha = 0.10f) else SurfaceInk)
+                    .glass(RoundedCornerShape(14.dp), settings.look == Look.BLOOM)
+                    .background(if (selected == control) accent.copy(alpha = 0.10f) else Color.Transparent)
                     .border(1.dp, if (selected == control) accent.copy(alpha = 0.42f) else EdgeInk, RoundedCornerShape(14.dp))
                     .selectable(selected = selected == control, enabled = enabled, role = Role.Tab) { onSelect(control) }
                     .padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -123,7 +124,7 @@ private fun exponential(value: Float, min: Double, max: Double): Double = min * 
     HorizontalDivider(color = EdgeInk)
 }
 
-@Composable internal fun GalleryButton(uri: String?) {
+@Composable internal fun GalleryButton(uri: String?, enabled: Boolean = true, onOpen: () -> Unit) {
     val context = LocalContext.current
     val thumbnail by produceState<android.graphics.Bitmap?>(null, uri) {
         value = null
@@ -131,20 +132,16 @@ private fun exponential(value: Float, min: Double, max: Double): Double = min * 
             runCatching { context.contentResolver.loadThumbnail(Uri.parse(uri), android.util.Size(120, 120), null) }.getOrNull()
         }
     }
-    Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(SurfaceInk)
-        .border(1.dp, EdgeInk, RoundedCornerShape(16.dp))
-        .semantics { contentDescription = if (uri == null) "No photos yet" else "Open last photo" }
-        .clickable(enabled = uri != null, role = Role.Button) {
-            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), "image/jpeg").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                .onFailure { android.widget.Toast.makeText(context, "Couldn’t open this photo. Check Pictures/Eidolon in your photo viewer.", android.widget.Toast.LENGTH_LONG).show() }
-        }, contentAlignment = Alignment.Center) {
+    Box(Modifier.size(52.dp).glass(RoundedCornerShape(16.dp))
+        .semantics { contentDescription = "Open gallery" }
+        .clickable(enabled = enabled, role = Role.Button, onClick = onOpen), contentAlignment = Alignment.Center) {
         thumbnail?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop) }
             ?: Glyph("gallery", Muted)
     }
 }
 
-@Composable internal fun Glyph(kind: String, color: Color, modifier: Modifier = Modifier) {
-    val description = when (kind) { "grid" -> "Toggle composition grid"; "flip" -> "Switch camera"; "info" -> "About capture modes"; else -> null }
+@Composable internal fun Glyph(kind: String, color: Color, modifier: Modifier = Modifier,
+    description: String? = when (kind) { "grid" -> "Toggle composition grid"; "flip" -> "Switch camera"; "info" -> "About capture modes"; else -> null }) {
     Canvas(modifier.size(22.dp).then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)) {
         val w = size.width; val h = size.height; val stroke = 1.4.dp.toPx()
         fun line(x: Float, y: Float, x2: Float, y2: Float) = drawLine(color, Offset(w*x,h*y), Offset(w*x2,h*y2), stroke, StrokeCap.Round)
@@ -154,6 +151,8 @@ private fun exponential(value: Float, min: Double, max: Double): Double = min * 
                 if (kind == "mark") { line(.37f,.5f,.63f,.5f); line(.5f,.37f,.5f,.63f) }
                 else drawCircle(color, w*.07f)
             }
+            "close" -> { line(.25f,.25f,.75f,.75f); line(.25f,.75f,.75f,.25f) }
+            "back" -> { line(.75f,.5f,.2f,.5f); line(.45f,.25f,.2f,.5f); line(.45f,.75f,.2f,.5f) }
             "arrow" -> { line(.15f,.5f,.85f,.5f); line(.6f,.25f,.85f,.5f); line(.6f,.75f,.85f,.5f) }
             "grid" -> { line(.33f,.1f,.33f,.9f); line(.67f,.1f,.67f,.9f); line(.1f,.33f,.9f,.33f); line(.1f,.67f,.9f,.67f) }
             "info" -> { drawCircle(color, w*.4f, style = Stroke(stroke)); line(.5f,.48f,.5f,.7f); drawCircle(color, stroke*.65f, Offset(w*.5f,h*.3f)) }
