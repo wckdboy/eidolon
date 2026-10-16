@@ -20,6 +20,9 @@ internal data class GalleryPhoto(val id: Long, val uri: String, val name: String
     val bloom: Boolean get() = name.contains("_BLOOM")
 }
 
+internal data class GalleryDetails(val iso: String, val shutter: String, val aperture: String,
+    val focalLength: String, val camera: String, val dimensions: String, val size: String)
+
 /** Scoped to Eidolon's folder and the app-owned rows available without library permissions. */
 internal class GalleryStore(context: Context) {
     private val resolver = context.applicationContext.contentResolver
@@ -67,17 +70,25 @@ internal class GalleryStore(context: Context) {
         }
     }
 
-    suspend fun details(photo: GalleryPhoto): String = withContext(Dispatchers.IO) {
-        val exposure = resolver.openInputStream(Uri.parse(photo.uri))?.use { input ->
+    suspend fun details(photo: GalleryPhoto): GalleryDetails = withContext(Dispatchers.IO) {
+        requireNotNull(resolver.openInputStream(Uri.parse(photo.uri))).use { input ->
             val exif = ExifInterface(input)
-            val iso = exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS)
             val seconds = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0)
-            val aperture = exif.getAttribute(ExifInterface.TAG_F_NUMBER)
-            listOfNotNull(iso?.let { "ISO $it" }, seconds.takeIf { it > 0 }?.let { CaptureMath.shutterLabel((it * 1e9).toLong()) },
-                aperture?.let { "ƒ/$it" }).joinToString(" · ")
-        }.orEmpty()
-        listOf(photo.name, "${photo.width} × ${photo.height}", "%.1f MB".format(java.util.Locale.US, photo.bytes / 1e6),
-            exposure, if (photo.rawUri != null) "RAW + JPEG · showing companion JPEG" else "JPEG").filter { it.isNotBlank() }.joinToString("\n")
+            val aperture = exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0)
+            val focal = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0)
+            val make = exif.getAttribute(ExifInterface.TAG_MAKE).orEmpty()
+            val model = exif.getAttribute(ExifInterface.TAG_MODEL).orEmpty()
+            val width = photo.width.takeIf { it > 0 } ?: exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
+            val height = photo.height.takeIf { it > 0 } ?: exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
+            GalleryDetails(
+                iso = exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS) ?: "—",
+                shutter = if (seconds > 0) CaptureMath.shutterLabel((seconds * 1e9).toLong()) else "—",
+                aperture = if (aperture > 0) "ƒ/%.1f".format(java.util.Locale.US, aperture) else "—",
+                focalLength = if (focal > 0) "%.1f mm".format(java.util.Locale.US, focal) else "—",
+                camera = (if (model.startsWith(make, ignoreCase = true)) model else "$make $model").trim().ifEmpty { "Not recorded" },
+                dimensions = if (width > 0 && height > 0) "$width × $height" else "Not recorded",
+                size = "%.1f MB".format(java.util.Locale.US, photo.bytes / 1e6))
+        }
     }
 
     suspend fun delete(photo: GalleryPhoto) = withContext(Dispatchers.IO) {

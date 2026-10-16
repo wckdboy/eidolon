@@ -8,11 +8,18 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -27,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -34,6 +43,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -44,7 +55,7 @@ import kotlinx.coroutines.CancellationException
 import java.text.DateFormat
 import java.util.Date
 
-@Composable internal fun GalleryScreen(onClose: () -> Unit) {
+@Composable internal fun GalleryScreen(onClose: () -> Unit, onLibraryChanged: (String?) -> Unit = {}) {
     val context = LocalContext.current
     val store = remember { GalleryStore(context) }
     val scope = rememberCoroutineScope()
@@ -52,14 +63,25 @@ import java.util.Date
     var photos by remember { mutableStateOf<List<GalleryPhoto>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var filter by rememberSaveable { mutableStateOf("All") }
+    val gridState = rememberLazyGridState()
     var selected by rememberSaveable { mutableStateOf<Long?>(null) }
     var deleting by remember { mutableStateOf<GalleryPhoto?>(null) }
     var deletingNow by remember { mutableStateOf(false) }
-    var details by remember { mutableStateOf<String?>(null) }
+    var inspecting by remember { mutableStateOf<GalleryPhoto?>(null) }
+    var details by remember { mutableStateOf<GalleryDetails?>(null) }
+    var detailsError by remember { mutableStateOf(false) }
+    LaunchedEffect(inspecting?.id) {
+        details = null; detailsError = false
+        inspecting?.let { photo ->
+            galleryResult { store.details(photo) }.onSuccess { details = it }.onFailure { detailsError = true }
+        }
+    }
     LaunchedEffect(revision) {
         if (!loading) delay(160)
         galleryResult { store.photos() }.onSuccess {
             photos = it; error = null
+            onLibraryChanged(it.firstOrNull()?.uri)
             if (selected != null && it.none { photo -> photo.id == selected }) selected = null
         }
             .onFailure { error = "Couldn’t load your photos. Try again." }
@@ -85,11 +107,10 @@ import java.util.Date
                 }
                 runCatching { context.startActivity(Intent.createChooser(intent, "Share photo")) }
                     .onFailure { error = "No app is available to share this photo." }
-            }, onDelete = { deleting = it }, onInfo = { photo -> scope.launch {
-                details = galleryResult { store.details(photo) }.getOrElse { "Photo information is unavailable." }
-            } }, image = { photo, active -> ViewerImage(photo, active, store) })
+            }, onDelete = { deleting = it }, onInfo = { inspecting = it }, image = { photo, active -> ViewerImage(photo, active, store) })
     } else {
-        GalleryInterface(photos, loading, error, onClose, onRetry = { loading = true; revision++ }, onPhoto = { selected = it.id }) { photo ->
+        GalleryInterface(photos, loading, error, onClose, onRetry = { loading = true; revision++ }, onPhoto = { selected = it.id },
+            filter = filter, onFilter = { filter = it }, gridState = gridState) { photo ->
             GalleryThumbnail(photo, store)
         }
     }
@@ -99,30 +120,32 @@ import java.util.Date
         confirmButton = { TextButton(enabled = !deletingNow, onClick = { val photo = deleting!!; deletingNow = true; scope.launch {
             galleryResult { store.delete(photo) }.onSuccess {
                 photos = photos.filterNot { it.id == photo.id }; selected = null; revision++
+                onLibraryChanged(photos.firstOrNull()?.uri)
             }.onFailure { error = "Couldn’t delete this photo. It may no longer be available."; revision++ }
             deleting = null; deletingNow = false
         } }) { Text(if (deletingNow) "Deleting…" else "Delete", color = Peach) } },
         dismissButton = { TextButton(enabled = !deletingNow, onClick = { deleting = null }) { Text("Keep") } })
-    if (details != null) AlertDialog(onDismissRequest = { details = null }, containerColor = SurfaceInk,
-        title = { Text("Photo details") }, text = { Text(details!!, lineHeight = 24.sp) },
-        confirmButton = { TextButton(onClick = { details = null }) { Text("Done") } })
+    inspecting?.let { PhotoDetailsSheet(it, details, detailsError, onClose = { inspecting = null }) }
     if (error != null && selected != null) AlertDialog(onDismissRequest = { error = null }, containerColor = SurfaceInk,
         text = { Text(error!!) }, confirmButton = { TextButton(onClick = { error = null }) { Text("Done") } })
 }
 
 @Composable internal fun GalleryInterface(photos: List<GalleryPhoto>, loading: Boolean = false, error: String? = null,
     onClose: () -> Unit = {}, onRetry: () -> Unit = {}, onPhoto: (GalleryPhoto) -> Unit = {},
+    filter: String = "All", onFilter: (String) -> Unit = {}, gridState: LazyGridState = rememberLazyGridState(),
     thumbnail: @Composable (GalleryPhoto) -> Unit = {}) {
-    var filter by rememberSaveable { mutableStateOf("All") }
     val visible = remember(photos, filter) { photos.filter { filter == "All" || it.bloom == (filter == "Bloom") } }
+    val days = remember(visible) { visible.groupBy {
+        java.time.Instant.ofEpochMilli(it.timestamp).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+    } }
     Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(64.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Your moments", color = Paper, fontSize = 26.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Library", color = Paper, fontSize = 24.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             IconButton(onClick = onClose, modifier = Modifier.glass(CircleShape)) { Glyph("close", Paper, Modifier.semantics { contentDescription = "Back to camera" }) }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             listOf("All", "Pure", "Bloom").forEach { name ->
-                FilterChip(selected = filter == name, onClick = { filter = name }, label = { Text(name) },
+                FilterChip(selected = filter == name, onClick = { onFilter(name) }, label = { Text(name) },
                     colors = FilterChipDefaults.filterChipColors(selectedContainerColor = if (name == "Bloom") BloomViolet else Paper,
                         selectedLabelColor = Ink))
             }
@@ -139,15 +162,21 @@ import java.util.Date
                     TextButton(onClick = if (error != null) onRetry else onClose) { Text(if (error != null) "Try again" else "Open camera", color = Paper) }
                 }
             }
-        } else LazyVerticalGrid(columns = GridCells.Adaptive(112.dp), modifier = Modifier.fillMaxSize(),
+        } else LazyVerticalGrid(state = gridState, columns = GridCells.Adaptive(112.dp), modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 24.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(visible, key = { it.id }) { photo ->
-                Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).background(SurfaceInk)
-                    .clickable { onPhoto(photo) }.semantics { contentDescription = "Open ${if (photo.bloom) "Bloom" else "Pure"} photo ${photo.name}" }) {
-                    thumbnail(photo)
-                    if (photo.rawUri != null) Text("RAW", color = Paper, fontSize = 9.sp,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(6.dp).background(Ink.copy(alpha = 0.65f), RoundedCornerShape(5.dp))
-                            .glass(RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 2.dp))
+            days.forEach { (day, dayPhotos) ->
+                item(key = "day:$day", span = { GridItemSpan(maxLineSpan) }) {
+                    Text(day.format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)),
+                        color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp).semantics { heading() })
+                }
+                items(dayPhotos, key = { it.id }) { photo ->
+                    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(5.dp)).background(SurfaceInk)
+                        .clickable { onPhoto(photo) }.semantics { contentDescription = "Open ${if (photo.bloom) "Bloom" else "Pure"} photo ${photo.name}" }) {
+                        thumbnail(photo)
+                        if (photo.rawUri != null) Text("RAW", color = Paper, fontSize = 9.sp,
+                            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp).background(Ink.copy(alpha = 0.65f), RoundedCornerShape(5.dp))
+                                .glass(RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 2.dp))
+                    }
                 }
             }
         }
@@ -161,28 +190,25 @@ import java.util.Date
 
 @Composable internal fun PhotoViewer(photos: List<GalleryPhoto>, initialId: Long, onSelect: (Long) -> Unit = {},
     onClose: () -> Unit = {}, onShare: (GalleryPhoto, Boolean) -> Unit = { _, _ -> }, onDelete: (GalleryPhoto) -> Unit = {},
-    onInfo: (GalleryPhoto) -> Unit = {}, image: @Composable (GalleryPhoto, Boolean) -> Unit = { _, _ -> }) {
+    onInfo: (GalleryPhoto) -> Unit = {}, initiallyShowControls: Boolean = true,
+    image: @Composable (GalleryPhoto, Boolean) -> Unit = { _, _ -> }) {
     val pager = rememberPagerState(initialPage = photos.indexOfFirst { it.id == initialId }.coerceAtLeast(0), pageCount = { photos.size })
     var zoomed by remember { mutableStateOf(false) }
+    var showControls by rememberSaveable { mutableStateOf(initiallyShowControls) }
     val photo = photos[pager.currentPage.coerceAtMost(photos.lastIndex)]
-    LaunchedEffect(pager.currentPage) { zoomed = false; onSelect(photo.id) }
-    Column(Modifier.fillMaxSize().background(Ink).safeDrawingPadding()) {
-        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose, modifier = Modifier.glass(CircleShape)) { Glyph("back", Paper, Modifier.semantics { contentDescription = "Back to gallery" }) }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(photo.timestamp)), color = Paper, fontSize = 14.sp)
-                MicroText("${pager.currentPage + 1} / ${photos.size}", Muted)
-            }
-            IconButton(onClick = { onInfo(photo) }) { Glyph("info", Paper, description = "Photo details") }
-        }
-        HorizontalPager(state = pager, userScrollEnabled = !zoomed, modifier = Modifier.weight(1f).fillMaxWidth(), key = { photos[it].id }) { index ->
+    LaunchedEffect(pager.currentPage, photo.id) { zoomed = false; onSelect(photo.id) }
+    Box(Modifier.fillMaxSize().background(Ink)) {
+        HorizontalPager(state = pager, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize(), key = { photos[it].id }) { index ->
             var scale by remember(photos[index].id) { mutableFloatStateOf(1f) }
             var pan by remember(photos[index].id) { mutableStateOf(Offset.Zero) }
             LaunchedEffect(pager.currentPage) { if (pager.currentPage != index) { scale = 1f; pan = Offset.Zero } }
             BoxWithConstraints(Modifier.fillMaxSize().clip(RoundedCornerShape(4.dp))) {
                 val width = constraints.maxWidth.toFloat(); val height = constraints.maxHeight.toFloat()
                 Box(Modifier.fillMaxSize()
-                    .pointerInput(photos[index].id) { detectTapGestures(onDoubleTap = { scale = if (scale > 1f) 1f else 2.5f; pan = Offset.Zero; zoomed = scale > 1f }) }
+                    .semantics { onClick(label = "Show or hide viewer controls") { showControls = !showControls; true } }
+                    .pointerInput(photos[index].id) { detectTapGestures(
+                        onTap = { showControls = !showControls },
+                        onDoubleTap = { scale = if (scale > 1f) 1f else 2.5f; pan = Offset.Zero; zoomed = scale > 1f }) }
                     .transformable(state = rememberTransformableState { _, zoom, movement, _ ->
                         scale = (scale * zoom).coerceIn(1f, 5f)
                         pan = if (scale <= 1f) Offset.Zero else Offset(
@@ -195,10 +221,25 @@ import java.util.Date
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(16.dp).glass(RoundedCornerShape(24.dp)).padding(4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            TextButton(onClick = { onShare(photo, false) }) { Text("Share", color = Paper) }
-            if (photo.rawUri != null) TextButton(onClick = { onShare(photo, true) }) { Text("Share RAW", color = Paper) }
-            TextButton(onClick = { onDelete(photo) }) { Text("Delete", color = Muted) }
+        AnimatedVisibility(showControls, Modifier.align(Alignment.TopCenter), enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+            Row(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Ink.copy(alpha = 0.9f), Color.Transparent)))
+                .statusBarsPadding().height(64.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onClose, modifier = Modifier.glass(CircleShape)) { Glyph("back", Paper, description = "Back to gallery") }
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(photo.timestamp)), color = Paper, fontSize = 14.sp)
+                    MicroText("${pager.currentPage + 1} / ${photos.size}", Paper)
+                }
+                IconButton(onClick = { onInfo(photo) }, modifier = Modifier.glass(CircleShape)) { Glyph("info", Paper, description = "Photo details") }
+            }
+        }
+        AnimatedVisibility(showControls, Modifier.align(Alignment.BottomCenter), enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)
+                .background(Ink.copy(alpha = 0.8f), RoundedCornerShape(24.dp)).glass(RoundedCornerShape(24.dp)).padding(4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly) {
+                TextButton(onClick = { onShare(photo, false) }) { Text("Share", color = Paper) }
+                if (photo.rawUri != null) TextButton(onClick = { onShare(photo, true) }) { Text("Share RAW", color = Paper) }
+                TextButton(onClick = { onDelete(photo) }) { Text("Delete", color = Muted) }
+            }
         }
     }
 }

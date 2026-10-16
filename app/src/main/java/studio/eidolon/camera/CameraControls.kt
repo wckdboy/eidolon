@@ -1,6 +1,5 @@
 package studio.eidolon.camera
 
-import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.*
 import androidx.compose.foundation.selection.selectable
@@ -17,6 +16,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -41,13 +42,11 @@ internal fun ProControls(state: CameraState, settings: CaptureSettings, selected
         else -> info.manual
     }
     Column {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth().glass(RoundedCornerShape(18.dp), settings.look == Look.BLOOM).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             listOf("EV", "ISO", "SHUTTER", "FOCUS").forEach { control ->
                 val enabled = !state.busy && supported(control)
-                Column(Modifier.weight(1f).heightIn(min = 58.dp).clip(RoundedCornerShape(14.dp))
-                    .glass(RoundedCornerShape(14.dp), settings.look == Look.BLOOM)
-                    .background(if (selected == control) accent.copy(alpha = 0.10f) else Color.Transparent)
-                    .border(1.dp, if (selected == control) accent.copy(alpha = 0.42f) else EdgeInk, RoundedCornerShape(14.dp))
+                Column(Modifier.weight(1f).heightIn(min = 50.dp).clip(RoundedCornerShape(14.dp))
+                    .background(if (selected == control) accent.copy(alpha = 0.16f) else Color.Transparent)
                     .selectable(selected = selected == control, enabled = enabled, role = Role.Tab) { onSelect(control) }
                     .padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     MicroText(control, if (enabled) if (selected == control) accent else Muted else Muted.copy(alpha = 0.35f))
@@ -90,8 +89,12 @@ internal fun ProControls(state: CameraState, settings: CaptureSettings, selected
                         }
                     }
                 } else Text("Use Auto for EV", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                TextButton(enabled = !state.busy, onClick = { onChange(settings.copy(iso = null, shutterNs = null, focus = null, exposure = 0)) }) {
-                    Text("Reset", color = accent, fontSize = 12.sp)
+                TextButton(enabled = !state.busy, onClick = { onChange(when (selected) {
+                    "FOCUS" -> settings.copy(focus = null)
+                    "EV" -> settings.copy(exposure = 0)
+                    else -> settings.copy(iso = null, shutterNs = null)
+                }) }) {
+                    Text(if (selected == "EV") "Zero" else "Auto", color = accent, fontSize = 12.sp)
                 }
             }
         }
@@ -104,13 +107,28 @@ private fun exponential(value: Float, min: Double, max: Double): Double = min * 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun PrecisionSlider(value: Float, label: String, spokenValue: String, accent: Color, enabled: Boolean, steps: Int = 0, onChange: (Float) -> Unit) {
-    Slider(value = value, onValueChange = onChange, enabled = enabled, steps = steps,
+    val haptic = LocalHapticFeedback.current
+    var lastTick by remember(label) { mutableIntStateOf(-1) }
+    Slider(value = value, onValueChange = { next ->
+        val tick = (next * if (steps > 0) steps + 1 else 20).roundToInt()
+        if (lastTick >= 0 && tick != lastTick) haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+        lastTick = tick
+        onChange(next)
+    }, onValueChangeFinished = { lastTick = -1 }, enabled = enabled, steps = steps,
         modifier = Modifier.fillMaxWidth().height(48.dp).semantics { contentDescription = label; stateDescription = spokenValue },
         colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent, inactiveTrackColor = EdgeInk),
-        thumb = { Box(Modifier.size(16.dp).background(if (enabled) accent else Muted, CircleShape)) },
-        track = { slider -> SliderDefaults.Track(sliderState = slider, modifier = Modifier.height(3.dp),
-            colors = SliderDefaults.colors(activeTrackColor = accent, inactiveTrackColor = EdgeInk),
-            enabled = enabled, drawStopIndicator = null, thumbTrackGapSize = 4.dp) })
+        thumb = { Box(Modifier.width(3.dp).height(30.dp).background(if (enabled) accent else Muted, CircleShape)) },
+        track = { slider ->
+            Canvas(Modifier.fillMaxWidth().height(26.dp)) {
+                val count = if (steps in 1..39) steps + 1 else 40
+                for (tick in 0..count) {
+                    val fraction = tick.toFloat() / count
+                    val height = if (tick % 5 == 0) size.height * 0.8f else size.height * 0.42f
+                    drawLine(if (enabled && fraction <= slider.value) accent.copy(alpha = 0.65f) else Muted.copy(alpha = 0.35f),
+                        Offset(size.width * fraction, (size.height - height) / 2), Offset(size.width * fraction, (size.height + height) / 2), 1.dp.toPx())
+                }
+            }
+        })
 }
 
 @Composable internal fun MicroText(text: String, color: Color) {

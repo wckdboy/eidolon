@@ -126,7 +126,7 @@ private fun EidolonScreen(state: CameraState, engine: CameraEngine, initial: UiP
         if (value.look != settings.look) { feelingOpen = false; activeControl = null }
         settings = value; engine.update(value)
     }
-    if (galleryOpen) GalleryScreen(onClose = { galleryOpen = false }) else CameraInterface(
+    if (galleryOpen) GalleryScreen(onClose = { galleryOpen = false }, onLibraryChanged = engine::syncLibraryPhoto) else CameraInterface(
         state = state, settings = settings, workspace = workspace, grid = grid,
         granted = granted, settingsRequired = asked && !activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA),
         activeControl = activeControl, feelingOpen = feelingOpen, showDetails = details,

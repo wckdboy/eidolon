@@ -56,11 +56,11 @@ internal fun CameraInterface(
                 Box(Modifier.width(frameWidth).aspectRatio(ratio).clip(RoundedCornerShape(18.dp)).background(SurfaceInk)) {
                     if (granted) preview()
                     if (granted && state.ready && grid) CompositionGrid()
+                    if (granted && state.ready) FrameReadout(state, settings.look, workspace, grid, accent, onGrid)
                     if (!granted) PermissionPane(accent, settingsRequired, onPermission)
                     else if (!state.ready) CameraUnavailable(state, accent, onRetry)
                 }
             }
-            CameraReadout(state, settings.look, workspace, grid, accent, onGrid)
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.glass(CircleShape, vivid)
@@ -89,12 +89,10 @@ internal fun CameraInterface(
                 if (workspace == Workspace.PRO && state.ready) {
                     ProControls(state, settings, activeControl, accent, onControl, onChange)
                 }
-                Row(Modifier.fillMaxWidth().height(104.dp), horizontalArrangement = Arrangement.SpaceAround,
+                Row(Modifier.fillMaxWidth().height(96.dp), horizontalArrangement = Arrangement.SpaceAround,
                     verticalAlignment = Alignment.CenterVertically) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         GalleryButton(state.savedUri, enabled = !state.busy, onOpen = onGallery)
-                        Spacer(Modifier.height(7.dp))
-                        MicroText("LIBRARY", Muted)
                     }
                     Shutter(state.ready, state.busy, state.saving, vivid, accent, onCapture)
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -102,8 +100,6 @@ internal fun CameraInterface(
                             modifier = Modifier.size(52.dp).glass(CircleShape, vivid)) {
                             Glyph("flip", if (state.ready && state.info.cameraCount > 1) Paper else Muted.copy(alpha = 0.4f))
                         }
-                        Spacer(Modifier.height(7.dp))
-                        MicroText("FLIP", Muted)
                     }
                 }
                 val status = when {
@@ -123,7 +119,7 @@ internal fun CameraInterface(
 @Composable
 private fun CameraHeader(workspace: Workspace, enabled: Boolean, accent: Color, vivid: Boolean, onWorkspace: (Workspace) -> Unit, onInfo: () -> Unit) {
     val showWordmark = LocalDensity.current.fontScale < 1.4f
-    Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(56.dp).padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Glyph("mark", accent, Modifier.size(25.dp).semantics { contentDescription = "Eidolon" })
             if (showWordmark) Text("eidolon", color = Paper, fontSize = 20.sp, letterSpacing = (-0.8).sp,
@@ -158,22 +154,28 @@ private fun IntentTab(look: Look, selected: Boolean, accent: Color, enabled: Boo
 }
 
 @Composable
-private fun CameraReadout(state: CameraState, look: Look, workspace: Workspace, grid: Boolean, accent: Color, onGrid: (Boolean) -> Unit) {
-    val largeText = LocalDensity.current.fontScale >= 1.4f
-    val format = if (!state.ready) "STANDBY" else if (look == Look.PURE && state.info.raw) "RAW + JPEG" else "JPEG"
-    val metering = "${state.iso} ISO  /  ${CaptureMath.shutterLabel(state.shutterNs)}"
-    val showMetering = state.ready && workspace == Workspace.PRO
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 20.dp, end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(5.dp).background(if (state.ready) accent else Muted, CircleShape))
+private fun BoxScope.FrameReadout(state: CameraState, look: Look, workspace: Workspace, grid: Boolean, accent: Color, onGrid: (Boolean) -> Unit) {
+    val format = if (look == Look.PURE && state.info.raw) "RAW + JPEG" else "JPEG"
+    Row(Modifier.align(Alignment.TopStart).padding(12.dp)
+        .background(Ink.copy(alpha = 0.65f), CircleShape).glass(CircleShape, look == Look.BLOOM)
+        .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(4.dp).background(accent, CircleShape))
         Spacer(Modifier.width(7.dp))
-        Column(Modifier.weight(1f)) {
-            MicroText(format, Paper)
-            if (largeText && showMetering) MicroText(metering, Muted)
-        }
-        if (!largeText && showMetering) MicroText(metering, Muted)
-        Spacer(Modifier.width(6.dp))
-        IconToggleButton(checked = grid, onCheckedChange = onGrid, modifier = Modifier.size(48.dp)) {
-            Glyph("grid", if (grid) accent else Muted, Modifier.size(18.dp))
+        MicroText(format, Paper)
+    }
+    Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+        .padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (workspace == Workspace.PRO) {
+            Column(Modifier.weight(1f)) {
+                Box(Modifier.background(Ink.copy(alpha = 0.65f), CircleShape).glass(CircleShape)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    MicroText("${state.iso} ISO  ·  ${CaptureMath.shutterLabel(state.shutterNs)}", Paper)
+                }
+            }
+        } else Spacer(Modifier.weight(1f))
+        IconToggleButton(checked = grid, onCheckedChange = onGrid, modifier = Modifier.size(48.dp)
+            .background(Ink.copy(alpha = 0.55f), CircleShape).glass(CircleShape, look == Look.BLOOM)) {
+            Glyph("grid", if (grid) accent else Paper, Modifier.size(18.dp))
         }
     }
 }
@@ -255,7 +257,7 @@ private fun CaptureDetails(state: CameraState, onDismiss: () -> Unit) {
             Text("Pure", color = Acid, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Text("Sensor DNG plus a companion JPEG when supported. Requests sharpening and noise reduction off where the camera allows it.",
                 color = Muted, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp, bottom = 20.dp))
-            Text("Bloom", color = Peach, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text("Bloom", color = BloomViolet, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Text("Warm color and gentle contrast, with adjustable intensity. Grades the JPEG; at 0% the original is preserved.",
                 color = Muted, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 6.dp, bottom = 24.dp))
             Capability("Sensor RAW / DNG", if (state.ready) if (state.info.raw) "Available" else "Unavailable" else "Not connected")

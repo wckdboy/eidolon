@@ -5,23 +5,23 @@
 - **Pure:** sensor RAW/DNG plus a companion JPEG where the camera supports it. Requests noise reduction and edge enhancement OFF when exposed by the device. Falls back visibly to JPEG when the RAW session is unavailable.
 - **Bloom:** a warm, saturated rendering with gentler contrast and an adjustable intensity. A shared color matrix drives the preview and saved JPEG. This is the first color treatment, not a finished computational photography pipeline.
 - **Fun:** automatic exposure and focus, a big shutter, composition grid, camera switching, and an integrated photo library.
-- **Pro:** manual ISO and shutter speed, manual focus, exposure compensation in auto exposure, live metering, and an automatic reset. Unsupported controls stay disabled.
+- **Pro:** manual ISO and shutter speed, manual focus, exposure compensation in auto exposure, live metering, and control-specific Auto/Zero actions. Unsupported controls stay disabled.
 
 Native Kotlin / Jetpack Compose UI; Camera2 capture; local MediaStore storage. Android 10+ (API 29). No account, analytics, network permission, location collection, or cloud processing.
 
 ## Download
 
-Get **[v0.1.0-alpha.4 — Glass & Color](https://github.com/wckdboy/eidolon/releases/tag/v0.1.0-alpha.4)** from GitHub Releases. This is an early testing release, not a production camera recommendation.
+Get **[v0.1.0-alpha.5 — Viewfinder](https://github.com/wckdboy/eidolon/releases/tag/v0.1.0-alpha.5)** from GitHub Releases. This is an early testing release, not a production camera recommendation.
 
 | Asset | Purpose |
 | --- | --- |
-| `eidolon-0.1.0-alpha.4-release.apk` | Signed, non-debuggable universal APK; recommended for trying the app. |
-| `eidolon-0.1.0-alpha.4-debug.apk` | Debuggable universal APK with a separate application ID; can coexist with the release app. |
+| `eidolon-0.1.0-alpha.5-release.apk` | Signed, non-debuggable universal APK; recommended for trying the app. |
+| `eidolon-0.1.0-alpha.5-debug.apk` | Debuggable universal APK with a separate application ID; can coexist with the release app. |
 | `README.md` | These setup instructions, features, and known limits. |
 | `SHA256SUMS` | Download checksums. |
 | `BUILD-INFO.txt` | Source commit, build versions, validation, and signing certificate fingerprint. |
 | `mapping.txt.gz` | R8 mapping for decoding crash stack traces from this release. |
-| `ui-previews.zip` | Eleven host-rendered UI reference images using a synthetic scene. |
+| `ui-previews.zip` | Thirteen host-rendered UI reference images using a synthetic scene. |
 
 Download an APK on your Android phone, open it, and allow installation from your browser or file manager when Android asks. APKs support Android 10 and newer. The release app uses `studio.eidolon.camera`; the debug app uses `studio.eidolon.camera.debug`.
 
@@ -40,7 +40,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Set `ANDROID_HOME` to your SDK directory, or create an untracked `local.properties` containing `sdk.dir=/path/to/Android/sdk`.
 
-Grant camera access from the opening screen. Photos appear under **Pictures/Eidolon**. Pure produces a matched `.dng` / `.jpg` pair when available; Bloom produces a `.jpg`. The library button opens Eidolon’s built-in gallery. Filter Pure/Bloom shots, swipe between photos, double-tap or pinch to zoom, inspect exposure metadata, share the original JPEG or its RAW companion, and delete a capture after confirmation. The camera pauses while browsing and resumes when you return. The library shows Eidolon photos accessible to this installation; it does not request access to your whole photo library. Photos from another app variant or an uninstalled copy may only be accessible through your system gallery.
+Grant camera access from the opening screen. Photos appear under **Pictures/Eidolon**. Pure produces a matched `.dng` / `.jpg` pair when available; Bloom produces a `.jpg`. The library button opens Eidolon’s built-in gallery. Browse captures grouped by date, filter Pure/Bloom shots, swipe between photos, double-tap or pinch to zoom, tap once to hide or reveal viewer controls, inspect the exposure metadata sheet, share the original JPEG or its RAW companion, and delete a capture after confirmation. The camera pauses while browsing and resumes when you return. The library shows Eidolon photos accessible to this installation; it does not request access to your whole photo library. Photos from another app variant or an uninstalled copy may only be accessible through your system gallery.
 
 ## Release builds
 
@@ -63,28 +63,36 @@ The script refuses to overwrite existing signing material. With `.signing/releas
 
 ## Current UI and responsiveness improvements
 
-Alpha.4 gives Pure monochrome glass controls and introduces a vivid violet/pink/cyan palette when entering Bloom. Translucent gradients, fine highlights, pill selectors, a tactile shutter, and compact Pro cards keep the image central. Glass is drawn with lightweight gradients and borders; it does not blur or copy camera frames. Permission, opening, saving, error, and capture-information states share the same visual system. The adaptive launcher icon supports themed icons. The live image stays free of decorative gradients and captions.
+Alpha.5 gives more space to the image in Pro: RAW/JPEG status, metering, and the grid toggle sit at the viewfinder edges, while a compact glass control strip replaces the separate Pro cards. The full capture aspect ratio stays visible. Pure retains monochrome glass controls; entering Bloom shifts into vivid violet/pink/cyan. Translucent surfaces, fine highlights, pill selectors, and a tactile shutter keep the image central. Glass is drawn with lightweight gradients and borders; it does not blur or copy camera frames. Permission, opening, saving, error, and capture-information states share the same visual system. The adaptive launcher icon supports themed icons. Small dark glass surfaces keep the corner controls legible while leaving the rest of the live image unobscured.
 
-Tap a Pro card for its slider; tap Bloom’s percentage for intensity. The grid has a 48 dp toggle target and checked-state semantics. Sliders announce actual ISO, shutter, focus, and EV values; exposure compensation snaps to hardware-supported increments. Fractional shutter times display accurately (for example, 0.80s), and reciprocals round correctly. Larger text gets a two-line capture readout and simplified selectors.
+Tap a Pro control for a tick-marked adjustment ruler with haptic detents; tap Bloom’s percentage for intensity. The grid has a 48 dp toggle target and checked-state semantics. Sliders announce actual ISO, shutter, focus, and EV values; exposure compensation snaps to hardware-supported increments. Fractional shutter times display accurately (for example, 0.80s), and reciprocals round correctly. Larger text gets simplified selectors. Auto restores the selected focus or exposure controls without resetting unrelated settings; Zero resets EV.
 
 Pure/Bloom, intensity, Fun/Pro, and the grid persist across launches. Preferences load off the UI thread, slider changes are debounced before asynchronous disk writes, and unchanged preferences are skipped. Manual sensor settings start in Auto on a cold launch; switching to Fun also resets manual exposure, focus, and EV. The last photo remains available across launches.
 
-The gallery reads metadata off the UI thread, caches at most 16 MiB of thumbnails, and limits concurrent reads to two. Only the active viewer page loads an image up to 3,072 pixels on its longest edge; other pages use thumbnails. Zoom affects this display copy, while sharing uses the untouched full-resolution file. A RAW/JPEG pair appears as one moment; deleting it removes both files. Pending saves appear automatically after publication.
+The gallery reads metadata off the UI thread, caches at most 16 MiB of thumbnails, and limits concurrent reads to two. Only the active viewer page loads an image up to 3,072 pixels on its longest edge; other pages use thumbnails. Zoom affects this display copy, while sharing uses the untouched full-resolution file. A RAW/JPEG pair appears as one moment; deleting it removes both files. Pending saves appear automatically after publication. Date groups, filtering, and the gallery scroll position are retained while viewing a photo. Deleting the newest photo updates the camera’s thumbnail to the next available image. Viewer controls fade over the image and can be hidden with a tap. The metadata sheet separates ISO, shutter, aperture, focal length, camera, dimensions, size, and RAW/JPEG status; missing camera metadata stays explicitly unrecorded.
 
 The presentation is separated from camera ownership. Short color and shutter-press transitions use 90–240 ms animations; no decorative blur or continuous animation is applied to the viewfinder. Bloom intensity changes update only its rendering layer. Sensor updates are coalesced over 16 ms, identical camera snapshots are skipped, and completed capture timeouts are cancelled. R8 remains enabled for release code and resources. These changes remove avoidable work; real-phone latency and peak-memory benchmarks remain to be collected.
 
 The following are host-rendered previews of the actual Compose UI, using a synthetic architectural scene. They demonstrate layout, not photographic output.
 
 <p>
-  <img src="artifacts/screenshots/alpha4/pure-fun.png" width="300" alt="Eidolon Pure Fun UI with a synthetic scene" />
-  <img src="artifacts/screenshots/alpha4/bloom-pro.png" width="300" alt="Eidolon Bloom Pro UI with a synthetic scene" />
-  <img src="artifacts/screenshots/alpha4/gallery.png" width="300" alt="Eidolon gallery using synthetic thumbnails" />
-  <img src="artifacts/screenshots/alpha4/viewer.png" width="300" alt="Eidolon image viewer using a synthetic image" />
+  <img src="artifacts/screenshots/alpha5/pure-fun.png" width="300" alt="Eidolon Pure Fun UI with a synthetic scene" />
+  <img src="artifacts/screenshots/alpha5/bloom-pro.png" width="300" alt="Eidolon Bloom Pro UI with a synthetic scene" />
+  <img src="artifacts/screenshots/alpha5/gallery.png" width="300" alt="Eidolon gallery using synthetic thumbnails" />
+  <img src="artifacts/screenshots/alpha5/viewer.png" width="300" alt="Eidolon image viewer using a synthetic image" />
+  <img src="artifacts/screenshots/alpha5/metadata.png" width="300" alt="Eidolon photo metadata panel using synthetic values" />
 </p>
 
 ### Mobbin references
 
-The Mobbin MCP search provided [Halide Mark III's compact manual control strip](https://mobbin.com/screens/6f125777-159c-4e85-a3e2-8cc37873b563): a dominant viewfinder, a small RAW status control, and a focus scale close to the shutter. [(Not Boring) Camera](https://mobbin.com/screens/90cc0a50-5c6a-485a-afaa-a823a07f770e) provides a more tactile reference with large dials, a prominent shutter, and exposure values at the edge of the image. Eidolon keeps its own visual language while using the former's compact control placement and the latter's clearly readable adjustments as references.
+These references were retrieved and visually inspected through the Mobbin MCP for this release. Eidolon adapts the interaction hierarchy to its own Pure/Bloom identity.
+
+| Reference | Applied to Eidolon |
+| --- | --- |
+| [Halide Mark III camera](https://mobbin.com/screens/5b0f05a2-1061-4630-af99-abdf73608a49) | Status at the viewfinder edges and a compact manual-control area close to the shutter. |
+| [Halide Mark III photo metadata](https://mobbin.com/screens/c2b0a38f-51af-4545-9ca4-332aae5688e3) | Structured exposure and file details in a bottom sheet over the photo. |
+| [(Not Boring) Camera adjustments](https://mobbin.com/screens/4b1b9fbe-07b0-436e-b562-43115ea049aa) | Visible ruler ticks, a precise adjustment indicator, and tactile feedback. |
+| [VSCO photo grid](https://mobbin.com/screens/e53589a9-e5c8-4aab-831e-1064e4076f63) | Dense image-led browsing with compact filters; Eidolon also groups captures by date. |
 
 ## Honest limits of this first build
 
@@ -102,7 +110,7 @@ Start with one reference Android phone and a fixed collection of daylight, skin,
 
 ## Validation
 
-The debug build, twelve unit tests (color, orientation, shutter labels, timestamp matching, sensor-control changes, concurrent reader ownership, and streaming JPEG metadata), and Android lint are runnable with the command above. Twelve Android instrumentation tests cover original-byte preservation, zero-strength Bloom, graded JPEG metadata, RAW-write and Bloom-decode rollback, saving while the camera closes, repeated captures with rapid adjustments and lens switching, preference recovery, and UI interaction/persistence. The UI test checks that changing modes keeps the same preview view attached. Additional tests block the writer to verify queue backpressure, exercise gallery/viewer/details/delete/return navigation, and save three 12 MP Bloom images to verify dimensions, orientation, thumbnail caching, and bounded viewer decoding. The stress test takes eight alternating Pure/Bloom shots after 800 rapid adjustments and three lens switches, checking every JPEG and saved-file count; its logged timings include emulator overhead and are not phone benchmarks. Run them on a connected emulator or phone with `./gradlew :app:connectedDebugAndroidTest`. When multiple devices are connected, set `ANDROID_SERIAL` to the intended test device so other devices are left untouched. The optimized release has a separate startup/preview lifecycle smoke test: `./gradlew -PtestBuildType=release :app:connectedReleaseAndroidTest`. Before running it, build and install the release APK, then grant camera permission with `adb -s DEVICE_SERIAL shell pm grant studio.eidolon.camera android.permission.CAMERA`. This keeps the framework-only smoke test independent of UI automation services. It requires local release signing material and logs startup/recreation/reopen-to-moving-preview times plus process PSS under `EidolonPerformance`; these are device diagnostics, not universal speed claims. Lint currently emits non-blocking warnings, including the portrait layout and platform EXIF API. Hardware acceptance testing remains required before a production release.
+The debug build, twelve unit tests (color, orientation, shutter labels, timestamp matching, sensor-control changes, concurrent reader ownership, and streaming JPEG metadata), and Android lint are runnable with the command above. Twelve Android instrumentation tests cover original-byte preservation, zero-strength Bloom, graded JPEG metadata, RAW-write and Bloom-decode rollback, saving while the camera closes, repeated captures with rapid adjustments and lens switching, preference recovery, and UI interaction/persistence. The UI test checks that changing modes keeps the same preview view attached. Additional tests block the writer to verify queue backpressure, exercise gallery/viewer/details/delete/return navigation, retained filtering and thumbnail refresh, hide/reveal controls, and save three 12 MP Bloom images to verify dimensions, orientation, thumbnail caching, and bounded viewer decoding. The stress test takes eight alternating Pure/Bloom shots after 800 rapid adjustments and three lens switches, checking every JPEG and saved-file count; its logged timings include emulator overhead and are not phone benchmarks. Run them on a connected emulator or phone with `./gradlew :app:connectedDebugAndroidTest`. When multiple devices are connected, set `ANDROID_SERIAL` to the intended test device so other devices are left untouched. The optimized release has a separate startup/preview lifecycle smoke test: `./gradlew -PtestBuildType=release :app:connectedReleaseAndroidTest`. Before running it, build and install the release APK, then grant camera permission with `adb -s DEVICE_SERIAL shell pm grant studio.eidolon.camera android.permission.CAMERA`. This keeps the framework-only smoke test independent of UI automation services. It requires local release signing material and logs startup/recreation/reopen-to-moving-preview times plus process PSS under `EidolonPerformance`; these are device diagnostics, not universal speed claims. Lint currently emits non-blocking warnings, including the portrait layout and platform EXIF API. Hardware acceptance testing remains required before a production release.
 
 In alpha.1, on an API 36.1 emulator, the permission flow, live preview, camera switching, background/resume recovery, Pure DNG + JPEG capture, and Bloom JPEG capture were exercised. Both JPEGs decoded successfully with orientation preserved. The DNG contained a CFA photometric tag and DNG version metadata. A Pro capture requested ISO 469 and the saved JPEG reported ISO 469. No runtime crashes were logged during these checks. Synthetic emulator scenes were used; these checks do not establish photographic quality.
 
@@ -114,6 +122,8 @@ Alpha.3 passed all nine unit tests, nine debug instrumentation tests, the optimi
 
 Alpha.4 passed twelve unit tests, twelve debug instrumentation tests, the optimized-release lifecycle test, and eleven screenshot regression cases. Both APK variants build successfully; debug and release lint report zero errors and 22 non-blocking warnings. The new checks verify that a second capture can complete while the writer is deliberately blocked, reject captures at queue capacity, and exercise gallery swipe, double-tap zoom, metadata, deletion confirmation, and return to the camera. Three synthetic 12 MP Bloom files retained full dimensions and orientation; their display copies decoded within the 3,072-pixel viewer bound. Real-phone processing speed remains unmeasured; this release removes a JPEG rewrite and reduces shutter lockout without reducing saved-image resolution or encoding quality.
 
-The eleven host-rendered screenshot cases cover: Pure Fun, Bloom Pro, a small phone, Pure and Bloom at 1.5× text, permission, error, saving, gallery, empty gallery at large text, and photo viewer. Reference images are committed under `app/src/screenshotTestDebug/reference`. Run `./gradlew :app:validateDebugScreenshotTest` to check them; after an intentional UI change, render with `:app:updateDebugScreenshotTest` and inspect the new images before accepting them. The screenshot plugin is experimental and is used only for development tests.
+Alpha.5 passed twelve unit tests, twelve debug instrumentation tests, the optimized-release lifecycle test, and thirteen screenshot cases. Debug and release lint report zero errors and 23 non-blocking warnings. The gallery interaction test additionally checks hiding/revealing controls, the metadata sheet, retained filtering, and refreshing the camera thumbnail after deletion. Camera mode changes still retain the same preview view. Haptic feel and real-phone frame pacing remain hardware acceptance checks.
+
+The thirteen host-rendered screenshot cases cover: Pure Fun, Bloom Pro, a small phone, Pure and Bloom at 1.5× text, permission, error, saving, gallery, empty gallery at large text, photo viewer, hidden viewer controls, and the metadata panel at larger text. Reference images are committed under `app/src/screenshotTestDebug/reference`. Run `./gradlew :app:validateDebugScreenshotTest` to check them; after an intentional UI change, render with `:app:updateDebugScreenshotTest` and inspect the new images before accepting them. The screenshot plugin is experimental and is used only for development tests.
 
 One alpha.3 API 36.1 emulator smoke run measured instrumented activity launch → moving preview at 1,079 ms, recreation at 450 ms, and reopening at 1,052 ms, with process PSS samples of 36,850–38,409 KiB. These include test synchronization and run inside an already started instrumentation process; they are neither process cold-start benchmarks nor peak capture-memory measurements. Real-phone latency, color, thermal behavior, and peak memory remain unmeasured.

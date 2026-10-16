@@ -65,7 +65,7 @@ class GalleryTest {
                 assertEquals(2304, image.width)
                 assertEquals(3072, image.height)
                 image.recycle()
-                assertTrue(store.details(photo).contains("ISO 200"))
+                assertEquals("200", store.details(photo).iso)
                 store.delete(photo)
                 created.remove(uri)
                 assertFalse(store.photos().any { it.id == photo.id })
@@ -79,6 +79,8 @@ class GalleryTest {
     @Test fun galleryViewerDetailsDeleteAndReturnToLiveCamera() {
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
         val store = GalleryStore(context)
+        val preferences = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
+        val previousPhoto = preferences.getString("lastPhoto", null)
         val pureUri = PhotoStore(context).save(fixture(64, 48), null, CaptureSettings())
         val uri = PhotoStore(context).save(fixture(64, 48), null, CaptureSettings(look = Look.BLOOM))
         val photo = runBlocking { store.photos().single { it.uri == uri.toString() } }
@@ -86,13 +88,17 @@ class GalleryTest {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 compose.waitUntil(20_000) { compose.onAllNodesWithContentDescription("Open gallery").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithContentDescription("Open gallery").performClick()
-                compose.onNodeWithText("Your moments").assertExists()
+                compose.onNodeWithText("Library").assertExists()
                 scenario.onActivity { assertFalse("Gallery must detach the live preview", hasTexture(it.window.decorView)) }
                 compose.onNodeWithText("Bloom").performClick()
                 val label = "Open Bloom photo ${photo.name}"
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(label).fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithContentDescription(label).performClick()
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithContentDescription("Photo").performTouchInput { click() }
+                compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Photo details").fetchSemanticsNodes().isEmpty() }
+                compose.onNodeWithContentDescription("Photo").performTouchInput { click() }
+                compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Photo details").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithContentDescription("Photo").performTouchInput { doubleClick() }
                 compose.onNodeWithContentDescription("Photo").performTouchInput { doubleClick() }
                 compose.onNodeWithContentDescription("Photo").performTouchInput { swipeLeft() }
@@ -100,15 +106,17 @@ class GalleryTest {
                 compose.onNodeWithContentDescription("Photo").performTouchInput { swipeRight() }
                 compose.waitUntil(5_000) { compose.onAllNodesWithText("1 /", substring = true).fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithContentDescription("Photo details").performClick()
-                compose.waitUntil(10_000) { compose.onAllNodesWithText("ISO 200", substring = true).fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("200").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithText("Done").performClick()
                 compose.onNodeWithText("Delete").performClick()
                 compose.onNodeWithText("Keep").performClick()
                 assertTrue(runBlocking { store.photos().any { it.id == photo.id } })
                 compose.onNodeWithText("Delete").performClick()
                 compose.onNode(hasText("Delete") and hasAnyAncestor(isDialog())).performClick()
-                compose.waitUntil(10_000) { compose.onAllNodesWithText("Your moments").fetchSemanticsNodes().isNotEmpty() }
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("Library").fetchSemanticsNodes().isNotEmpty() }
                 assertFalse(runBlocking { store.photos().any { it.id == photo.id } })
+                compose.onNodeWithText("Bloom").assertIsSelected()
+                compose.waitUntil(5_000) { preferences.getString("lastPhoto", null) == pureUri.toString() }
                 compose.onNodeWithContentDescription("Back to camera").performClick()
                 compose.waitUntil(20_000) { compose.onAllNodesWithContentDescription("Take photo").fetchSemanticsNodes().any {
                     !it.config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled)
@@ -118,6 +126,7 @@ class GalleryTest {
         } finally {
             listOf(uri, pureUri).forEach { runCatching { context.contentResolver.delete(it, null, null) } }
             store.clearThumbnails()
+            preferences.edit().putString("lastPhoto", previousPhoto).commit()
         }
     }
 

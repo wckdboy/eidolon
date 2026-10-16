@@ -16,8 +16,8 @@ android {
         applicationId = "studio.eidolon.camera"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.0-alpha.4"
+        versionCode = 5
+        versionName = "0.1.0-alpha.5"
         testInstrumentationRunner = if (testedBuildType == "release")
             "studio.eidolon.smoke.ReleaseSmokeInstrumentation" else "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -88,6 +88,12 @@ class CameraEngine(private val context: Context,
         main.removeCallbacks(lookUpdate)
         handler.post { active = false; closeCamera(); writer.shutdown(); thread.quitSafely() }
     }
+    fun syncLibraryPhoto(uri: String?) { handler.post {
+        // A gallery query can overlap publication; the writer owns the latest URI until it drains.
+        if (savingCount > 0 || state.savedUri == uri) return@post
+        preferences.edit().putString("lastPhoto", uri).apply()
+        publish(state.copy(savedUri = uri))
+    } }
     fun setOrientation(degrees: Int) { orientation = degrees }
     fun update(value: CaptureSettings) {
         val previous = settings

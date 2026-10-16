@@ -2,6 +2,9 @@ package studio.eidolon.camera
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -88,3 +91,15 @@ private val gallerySamples = List(12) { index -> GalleryPhoto(index.toLong(), "p
 @PreviewTest
 @Preview(name = "Photo viewer", widthDp = 390, heightDp = 844, showBackground = true)
 @Composable fun PhotoViewerPreview() { EidolonTheme { PhotoViewer(gallerySamples, 1) { _, _ -> PreviewScene() } } }
+
+@PreviewTest
+@Preview(name = "Viewer hidden controls", widthDp = 390, heightDp = 844, showBackground = true)
+@Composable fun ViewerHiddenPreview() { EidolonTheme { PhotoViewer(gallerySamples, 1, initiallyShowControls = false) { _, _ -> PreviewScene() } } }
+
+@PreviewTest
+@Preview(name = "Photo metadata", widthDp = 360, heightDp = 740, fontScale = 1.3f, showBackground = true)
+@Composable fun PhotoMetadataPreview() { EidolonTheme {
+    Box(Modifier.fillMaxSize().background(SurfaceInk), contentAlignment = Alignment.BottomCenter) {
+        PhotoDetailsPanel(gallerySamples[1], GalleryDetails("200", "1/125", "ƒ/1.8", "26.0 mm", "Reference camera", "4000 × 3000", "3.5 MB"))
+    }
+} }
