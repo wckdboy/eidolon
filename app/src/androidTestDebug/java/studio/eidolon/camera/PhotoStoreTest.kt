@@ -83,4 +83,12 @@ class PhotoStoreTest {
         }
         assertEquals(before, photoCount())
     }
+
+    @Test fun failedBloomDecodeRollsBackPendingPhoto() {
+        val before = photoCount()
+        assertThrows(IllegalArgumentException::class.java) {
+            PhotoStore(context).save(byteArrayOf(1, 2, 3), null, CaptureSettings(look = Look.BLOOM))
+        }
+        assertEquals(before, photoCount())
+    }
 }

@@ -4,7 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Debug;
 import android.os.SystemClock;
 import android.view.TextureView;
 import android.view.View;
@@ -29,19 +31,27 @@ public final class ReleaseSmokeInstrumentation extends Instrumentation {
         sendStatus(1, status);
         Bundle result = new Bundle();
         try {
-            getUiAutomation().grantRuntimePermission(getTargetContext().getPackageName(), Manifest.permission.CAMERA);
+            if (getTargetContext().checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                throw new AssertionError("Grant CAMERA with adb shell pm grant before running the release smoke test");
+            }
+            long started = SystemClock.elapsedRealtime();
             open();
             awaitFrames();
+            report("startup_to_moving_preview", started);
             ActivityMonitor monitor = addMonitor("studio.eidolon.camera.MainActivity", null, false);
+            started = SystemClock.elapsedRealtime();
             runOnMainSync(() -> activity.recreate());
             Activity recreated = waitForMonitorWithTimeout(monitor, 20_000);
             removeMonitor(monitor);
             if (recreated == null) throw new AssertionError("Activity recreation timed out");
             activity = recreated;
             awaitFrames();
+            report("recreation_to_moving_preview", started);
             close();
+            started = SystemClock.elapsedRealtime();
             open();
             awaitFrames();
+            report("reopen_to_moving_preview", started);
             close();
             sendStatus(0, status);
             result.putString("stream", "\nOK (1 test)\n");
@@ -53,6 +63,16 @@ public final class ReleaseSmokeInstrumentation extends Instrumentation {
             result.putString("stream", "\nFAILURES!!!\nTests run: 1, Failures: 1\n");
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    // Device diagnostics, not assertions or real-phone performance claims.
+    private void report(String stage, long started) {
+        long elapsed = SystemClock.elapsedRealtime() - started;
+        Debug.MemoryInfo memory = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(memory);
+        android.util.Log.i("EidolonPerformance", stage + "_ms=" + elapsed
+            + ", pss_kib=" + memory.getTotalPss()
+            + ", native_allocated_bytes=" + Debug.getNativeHeapAllocatedSize());
     }
 
     private void open() {

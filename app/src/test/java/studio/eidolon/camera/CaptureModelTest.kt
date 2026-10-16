@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CaptureModelTest {
+    @Test fun shutterLabelsPreserveSlowFractionsAndRoundReciprocals() {
+        assertEquals("AUTO", CaptureMath.shutterLabel(0))
+        assertEquals("1/30", CaptureMath.shutterLabel(33_333_334))
+        assertEquals("1/60", CaptureMath.shutterLabel(16_666_667))
+        assertEquals("0.25s", CaptureMath.shutterLabel(250_000_000))
+        assertEquals("0.80s", CaptureMath.shutterLabel(800_000_000))
+        assertEquals("1.0s", CaptureMath.shutterLabel(1_000_000_000))
+    }
+
     @Test fun bloomStrengthDoesNotChangeSensorControls() {
         val settings = CaptureSettings(look = Look.BLOOM)
         assertTrue(settings.sameSensorControls(settings.copy(bloom = 0.1f)))

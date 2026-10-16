@@ -1,5 +1,7 @@
 package studio.eidolon.camera
 
+import kotlin.math.roundToInt
+
 enum class Look { PURE, BLOOM }
 enum class Workspace { FUN, PRO }
 
@@ -77,6 +79,7 @@ object CaptureMath {
     fun shutterLabel(ns: Long): String = when {
         ns <= 0 -> "AUTO"
         ns >= 1_000_000_000L -> "%.1fs".format(java.util.Locale.US, ns / 1e9)
-        else -> "1/${(1e9 / ns).toInt().coerceAtLeast(1)}"
+        ns >= 250_000_000L -> "%.2fs".format(java.util.Locale.US, ns / 1e9)
+        else -> "1/${(1e9 / ns).roundToInt().coerceAtLeast(1)}"
     }
 }

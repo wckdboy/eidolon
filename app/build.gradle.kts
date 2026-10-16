@@ -3,19 +3,21 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.android.compose.screenshot")
 }
 
 val testedBuildType = providers.gradleProperty("testBuildType").getOrElse("debug")
 
 android {
+    experimentalProperties["android.experimental.enableScreenshotTest"] = true
     namespace = "studio.eidolon.camera"
     compileSdk = 37
     defaultConfig {
         applicationId = "studio.eidolon.camera"
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.0-alpha.2"
+        versionCode = 3
+        versionName = "0.1.0-alpha.3"
         testInstrumentationRunner = if (testedBuildType == "release")
             "studio.eidolon.smoke.ReleaseSmokeInstrumentation" else "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -57,9 +59,15 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    screenshotTestImplementation("com.android.tools.screenshot:screenshot-validation-api:0.0.1-alpha16")
+    screenshotTestImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     if (testedBuildType == "debug") {
+        androidTestImplementation(platform("androidx.compose:compose-bom:2026.09.00"))
         androidTestImplementation("androidx.test:runner:1.7.0")
         androidTestImplementation("androidx.test.ext:junit:1.3.0")
+        androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+        // Align with Test 1.7: older transitive Espresso uses removed Android input APIs.
+        androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     }
 }

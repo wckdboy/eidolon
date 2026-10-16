@@ -82,4 +82,56 @@ class CameraEngineTest {
             prefs.edit().putString("lastPhoto", previousPhoto).commit()
         }
     }
+
+    @Test fun repeatedCapturesAfterRapidAdjustmentsAndLensSwitching() {
+        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.CAMERA)
+        val before = photos()
+        val prefs = context.getSharedPreferences("camera", android.content.Context.MODE_PRIVATE)
+        val previousPhoto = prefs.getString("lastPhoto", null)
+        val timings = mutableListOf<String>()
+        try {
+            ActivityScenario.launch(CameraHarnessActivity::class.java).use { scenario ->
+                lateinit var queue: LinkedBlockingQueue<CameraState>
+                scenario.onActivity { queue = it.states }
+                var ready = awaitState(queue) { it.ready }
+                var previousUri = ready.savedUri
+                var expectedFiles = 0
+                repeat(8) { shot ->
+                    if (shot > 0 && shot % 2 == 0 && ready.info.cameraCount > 1) {
+                        queue.clear()
+                        scenario.onActivity { it.engine.flip() }
+                        awaitState(queue) { !it.ready }
+                        ready = awaitState(queue) { it.ready }
+                    }
+                    val look = if (shot % 2 == 0) Look.PURE else Look.BLOOM
+                    queue.clear()
+                    val started = SystemClock.elapsedRealtime()
+                    scenario.onActivity { activity ->
+                        // Exercise coalescing: many changes immediately followed by capture.
+                        repeat(100) { step ->
+                            activity.engine.update(CaptureSettings(look = look, bloom = step / 100f,
+                                exposure = if (step % 2 == 0) ready.info.evMin else ready.info.evMax))
+                        }
+                        activity.engine.update(CaptureSettings(look = look, bloom = 0.7f))
+                        activity.engine.capture()
+                    }
+                    val saved = awaitState(queue) { !it.busy && it.savedUri != previousUri && it.message.startsWith("Saved") }
+                    timings += "$shot,${look.name},${ready.info.raw},${SystemClock.elapsedRealtime() - started}"
+                    previousUri = saved.savedUri
+                    context.contentResolver.openInputStream(Uri.parse(saved.savedUri!!))!!.use {
+                        val bitmap = BitmapFactory.decodeStream(it)
+                        assertNotNull("Shot $shot must decode", bitmap)
+                        bitmap.recycle()
+                    }
+                    expectedFiles += if (look == Look.PURE && ready.info.raw) 2 else 1
+                    assertEquals("Each shot must publish exactly its expected files", expectedFiles, (photos() - before).size)
+                }
+                val output = "shot,look,raw_capable,adjustments_to_saved_ms\n" + timings.joinToString("\n") + "\n"
+                android.util.Log.i("EidolonPerformance", output)
+            }
+        } finally {
+            (photos() - before).forEach { context.contentResolver.delete(it, null, null) }
+            prefs.edit().putString("lastPhoto", previousPhoto).commit()
+        }
+    }
 }

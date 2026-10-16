@@ -6,7 +6,6 @@ import android.graphics.*
 import android.media.ExifInterface
 import android.net.Uri
 import android.provider.MediaStore
-import java.io.File
 import java.io.ByteArrayInputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -18,9 +17,7 @@ class PhotoStore(private val context: Context) {
     fun save(jpeg: ByteArray, writeRaw: ((OutputStream) -> Unit)?, settings: CaptureSettings): Uri {
         val stem = "EIDOLON_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}"
         val pending = mutableListOf<Uri>()
-        var rendered: File? = null
         try {
-            rendered = if (settings.look == Look.BLOOM && settings.bloom > 0f) renderBloom(jpeg, settings.bloom) else null
             fun insert(extension: String, mime: String): Uri {
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "${stem}_${settings.look.name}.$extension")
@@ -32,9 +29,8 @@ class PhotoStore(private val context: Context) {
                     .also { pending += it }
             }
             val photo = insert("jpg", "image/jpeg")
-            requireNotNull(context.contentResolver.openOutputStream(photo)).use { out ->
-                if (rendered != null) rendered.inputStream().use { it.copyTo(out) } else out.write(jpeg)
-            }
+            if (settings.look == Look.BLOOM && settings.bloom > 0f) renderBloom(jpeg, settings.bloom, photo)
+            else requireNotNull(context.contentResolver.openOutputStream(photo)).use { it.write(jpeg) }
             writeRaw?.let { write ->
                 val uri = insert("dng", "image/x-adobe-dng")
                 requireNotNull(context.contentResolver.openOutputStream(uri)).use(write)
@@ -46,11 +42,10 @@ class PhotoStore(private val context: Context) {
         } catch (e: Exception) {
             pending.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
             throw e
-        } finally { rendered?.delete() }
+        }
     }
 
-    private fun renderBloom(bytes: ByteArray, strength: Float): File {
-        val output = File.createTempFile("bloom", ".jpg", context.cacheDir)
+    private fun renderBloom(bytes: ByteArray, strength: Float, output: Uri) {
         var input: Bitmap? = null
         var result: Bitmap? = null
         try {
@@ -61,20 +56,25 @@ class PhotoStore(private val context: Context) {
             })
             // Release the decoded source before JPEG encoding and EXIF rewriting.
             input.recycle(); input = null
-            output.outputStream().use { check(result.compress(Bitmap.CompressFormat.JPEG, 97, it)) }
-            val original = ByteArrayInputStream(bytes).use { ExifInterface(it) }
-            val edited = ExifInterface(output)
-            listOf(ExifInterface.TAG_ORIENTATION, ExifInterface.TAG_DATETIME,
-                ExifInterface.TAG_DATETIME_ORIGINAL, ExifInterface.TAG_EXPOSURE_TIME,
-                ExifInterface.TAG_F_NUMBER, ExifInterface.TAG_ISO_SPEED_RATINGS,
-                ExifInterface.TAG_FOCAL_LENGTH, ExifInterface.TAG_MAKE, ExifInterface.TAG_MODEL,
-                ExifInterface.TAG_WHITE_BALANCE, ExifInterface.TAG_FLASH).forEach { tag ->
-                original.getAttribute(tag)?.let { edited.setAttribute(tag, it) }
+            // Encode directly into the pending MediaStore file: no temporary JPEG and second copy.
+            requireNotNull(context.contentResolver.openOutputStream(output)).use {
+                check(result.compress(Bitmap.CompressFormat.JPEG, 97, it))
             }
-            edited.setAttribute(ExifInterface.TAG_SOFTWARE, "Eidolon Bloom 0.1")
-            edited.saveAttributes()
-            return output
-        } catch (e: Exception) { output.delete(); throw e }
+            result.recycle(); result = null
+            val original = ByteArrayInputStream(bytes).use { ExifInterface(it) }
+            requireNotNull(context.contentResolver.openFileDescriptor(output, "rw")).use { descriptor ->
+                val edited = ExifInterface(descriptor.fileDescriptor)
+                listOf(ExifInterface.TAG_ORIENTATION, ExifInterface.TAG_DATETIME,
+                    ExifInterface.TAG_DATETIME_ORIGINAL, ExifInterface.TAG_EXPOSURE_TIME,
+                    ExifInterface.TAG_F_NUMBER, ExifInterface.TAG_ISO_SPEED_RATINGS,
+                    ExifInterface.TAG_FOCAL_LENGTH, ExifInterface.TAG_MAKE, ExifInterface.TAG_MODEL,
+                    ExifInterface.TAG_WHITE_BALANCE, ExifInterface.TAG_FLASH).forEach { tag ->
+                    original.getAttribute(tag)?.let { edited.setAttribute(tag, it) }
+                }
+                edited.setAttribute(ExifInterface.TAG_SOFTWARE, "Eidolon Bloom 0.1")
+                edited.saveAttributes()
+            }
+        }
         finally { input?.recycle(); result?.recycle() }
     }
 }
